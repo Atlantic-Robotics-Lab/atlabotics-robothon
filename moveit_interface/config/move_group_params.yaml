@@ -69,7 +69,7 @@ tasks:
         type: move_to
         planner: interpolation
         target: home_camera_vertical
-        vel_acc: [0.8, 0.8]
+        vel_acc: [1.0, 1.0]
 
       - name: move_blue_pre_button
         type: move_to
@@ -102,7 +102,7 @@ tasks:
         type: move_to
         planner: interpolation
         target: home_camera_vertical
-        vel_acc: [0.8, 0.8]
+        vel_acc: [1.0, 1.0]
 
       - name: move_red_pre_button
         type: move_to
@@ -134,20 +134,20 @@ tasks:
         type: move_to
         planner: interpolation
         target: home_camera_vertical
-        vel_acc: [0.5, 0.5]
+        vel_acc: [0.8, 0.8]
 
       - name: approach_stylus
         type: move_to
         planner: interpolation
         target: stylus_pose
         offset: [0.0, 0.0, 0.1]
-        vel_acc: [0.5, 0.5]
+        vel_acc: [0.8, 0.8]
 
       - name: align_stylus
         type: move_relative
         planner: cartesian
         direction: [-1.0, 0.0, 0.0]
-        minmax_dist: [0.01, 0.01]
+        minmax_dist: [0.001, 0.001]
         frame: ee_gripper
         vel_acc: [0.1, 0.1]
 
@@ -165,18 +165,11 @@ tasks:
         planner: cartesian
         direction: [0.0, 0.0, 0.1]
 
-      - name: move_home
-        type: move_to
-        planner: interpolation
-        target: home_camera
-        vel_acc: [0.8, 0.8]
-      
       - name: rotate_touch
         type: move_to
         planner: interpolation
         target: home_camera_touch
-
-
+        vel_acc: [0.8, 0.8]
 
   screen_approach:
     hand_frame: ee_touch
@@ -186,6 +179,7 @@ tasks:
         planner: interpolation
         target: screen_align_pose
         offset: [0.0, 0.0, 0.0]
+        vel_acc: [0.5, 0.5]
 
       - name: screen_approach
         type: move_to
@@ -223,7 +217,7 @@ tasks:
         type: move_to_path
         planner: interpolation
         target: screen_text_poses
-        offset: [0.0, 0.0, 0.0]
+        offset: [0.0, 0.0, -0.005]
         vel_acc: [0.05, 0.05]
 
       - name: retract_screen
@@ -233,26 +227,30 @@ tasks:
         offset: [0.054, -0.033, 0.02]
         vel_acc: [0.1, 0.1]
 
-  home_pose:
+  retract_align_screen:
     stages:
       - name: align_screen
         type: move_relative
         planner: cartesian
         direction: [0.0, 0.0, 1.0]
         minmax_dist: [0.1, 0.1]
+        vel_acc: [0.5, 0.5]
 
-      - name: home_camera
+      - name: move_home_magnet
         type: move_to
         planner: interpolation
-        target: home_camera
+        target: home_camera_magnet
+        vel_acc: [0.8, 0.8]
+
 
   place_stylus:
     hand_frame: ee_gripper
     stages:
-      - name: move_home_cam
+      - name: move_home
         type: move_to
         planner: interpolation
         target: home_camera_vertical
+        vel_acc: [0.8, 0.8]
 
       - name: approach_stylus
         type: move_to
@@ -266,10 +264,44 @@ tasks:
         direction: [-1.0, 0.0, 0.0]
         minmax_dist: [0.01, 0.01]
         frame: ee_gripper
+        vel_acc: [0.2, 0.2]
 
       - name: release_stylus
         type: move_relative
         planner: cartesian
         direction: [0.0, 0.0, -1]
-        minmax_dist: [0.08, 0.08]
+        minmax_dist: [0.095, 0.095]
 
+  solve_maze:
+    hand_frame: ee_magnet
+    stages:
+      - name: screen_align
+        type: move_to
+        planner: interpolation
+        target: screen_align_pose
+        offset: [0.0, 0.0, 0.0]
+        vel_acc: [0.5, 0.5]
+
+      - name: maze_path_poses
+        type: move_to_path
+        planner: interpolation
+        target: maze_path_poses
+        offset: [0.0, 0.0, 0.02]
+        vel_acc: [0.05, 0.05]
+  
+  retract_maze:
+    stages:
+      - name: maze_up
+        type: move_relative
+        planner: cartesian
+        direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.1, 0.1]
+        vel_acc: [0.8, 0.8]
+
+  home_pose:
+    stages:
+      - name: move_home
+        type: move_to
+        planner: interpolation
+        target: home_camera
+        vel_acc: [1.0, 1.0]

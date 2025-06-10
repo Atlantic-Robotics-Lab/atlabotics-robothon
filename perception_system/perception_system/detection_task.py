@@ -197,11 +197,16 @@ class DetectionNode(Node):
             if pixels:
                 self.points_pub.publish(pose_array)
         else:
-            self.get_logger().error("Failed")
+            self.get_logger().warn("No shape detected.")
+            pose = Pose()
             pose_array = PoseArray()
+            feature_camera = np.array(self.rs.deproject_pixel_to_known_height(0, 0, 100.0)) / 1000.0
+            print(f"feature_camera {feature_camera}",flush=True)
+            pose.position.x, pose.position.y, pose.position.z = feature_camera[0], feature_camera[1], feature_camera[2]
+            pose_array.poses.append(pose)
             pose_array.poses.clear()
             self.points_pub.publish(pose_array)
-            self.result_pub.publish(String(data="None"))
+            self.result_pub.publish(String(data="No shape detected"))
 
     def detection_callback(self, request, response):
         self.identify = True
@@ -280,7 +285,7 @@ class DetectionNode(Node):
         self.get_logger().error("Step1")
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        _, white_mask_loose = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+        _, white_mask_loose = cv2.threshold(gray, 190, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(white_mask_loose, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             return None
@@ -290,7 +295,7 @@ class DetectionNode(Node):
         masked_gray = cv2.bitwise_and(gray, gray, mask=screen_mask)
         blurred = cv2.GaussianBlur(masked_gray, (9, 9), 2)
         detected_circles = cv2.HoughCircles(
-            blurred, cv2.HOUGH_GRADIENT, dp=1.2, minDist=12, param1=50, param2=18, minRadius=5, maxRadius=22)
+            blurred, cv2.HOUGH_GRADIENT, dp=1.2, minDist=12, param1=50, param2=18, minRadius=5, maxRadius=25)
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         lower_dot = np.array([12, 150, 150])
         upper_dot = np.array([22, 255, 255])

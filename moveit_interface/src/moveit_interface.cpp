@@ -364,8 +364,8 @@ void MoveitInterface::isTransformAvailable(geometry_msgs::msg::Pose& input_pose,
 
 void MoveitInterface::gripperService(bool& state)
 {
-	m_waiting_for_gripper_response = false;
-  if (m_waiting_for_response) {
+	// m_waiting_for_gripper_response = false;
+  if (m_waiting_for_gripper_response) {
     RCLCPP_WARN(this->get_logger(), "Gripper Service call in progress, skipping new request");
     return;
   }
@@ -375,20 +375,20 @@ void MoveitInterface::gripperService(bool& state)
   }
 
   auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
-	if(state)
+	if(state) //Open
 	{
 		request->position = 255;
 		request->speed = 255;
 		request->force = 128;	
 	}
-	else
+	else //Close
 	{
 		request->position = 0;
-		request->speed = 255;
-		request->force = 128;
+		request->speed = 64;
+		request->force = 1;
 	}
 	
-	m_waiting_for_response = true;
+	m_waiting_for_gripper_response = true;
 
   auto future = m_gripperSrv->async_send_request(
     request,
@@ -396,11 +396,11 @@ void MoveitInterface::gripperService(bool& state)
       auto response = future.get();
       if (response->response == "Done") {
         RCLCPP_INFO(this->get_logger(), "Service succeeded: %s", response->response.c_str());
-		m_waiting_for_gripper_response = true;
+		// m_waiting_for_gripper_response = true;
       } else {
         RCLCPP_ERROR(this->get_logger(), "Service failed: %s", response->response.c_str());
       }
-      m_waiting_for_response = false;
+      m_waiting_for_gripper_response = false;
     }
   );
 }
@@ -471,38 +471,28 @@ void MoveitInterface::loadCSVToPoses(const std::string& filename, std::vector<ge
 	std::ifstream file(filename);
 	std::string line;
 
-	// std::cout<< "inside the function 1"<< std::endl;
-
 	while (std::getline(file, line)) {
-		// std::cout<< "inside the while 1"<< std::endl;
 		std::stringstream ss(line);
 		std::string value;
 		std::vector<double> data;
 
 		// Parse comma-separated values into the `data` vector
 		while (std::getline(ss, value, ',')) {
-			// std::cout<< "inside the while 2"<< std::endl;
 
 			// Trim whitespace
 			value.erase(std::remove_if(value.begin(), value.end(), ::isspace), value.end());
 
 			// Skip if value is empty
 			if (value.empty()) continue;
-
-
 			data.push_back(std::stod(value));
-			// std::cout<< "inside the while 3"<< std::endl;
 		}
 
-		if (data.size() == 7) {
+		if (data.size() == 3) {
 			geometry_msgs::msg::Pose test_pose;
 			test_pose.position.x = data[0];
 			test_pose.position.y = data[1];
 			test_pose.position.z = data[2];
-			test_pose.orientation.x = data[3];
-			test_pose.orientation.y = data[4];
-			test_pose.orientation.z = data[5];
-			test_pose.orientation.w = data[6];
+			test_pose.orientation.w = 1.0;
 
 			dummyPath.push_back(test_pose);
 			// std::cout << "pose converted !" << std::endl;
@@ -601,6 +591,8 @@ bool MoveitInterface::generateStaticTFPose()
 		m_screenRIght.orientation = m_screenAlignPose.orientation;
 		m_transformedPoses[source_frame] = m_screenRIght;
 
+		loadCSVToPoses("/home/atu-2/robothon/src/moveit_interface/config/maze_path.csv",m_mazePath);
+
 		return true;
 	}
 	catch(const tf2::TransformException & ex)
@@ -608,6 +600,18 @@ bool MoveitInterface::generateStaticTFPose()
 		RCLCPP_INFO(this->get_logger(), "Could not transform 'base_link' to 'screen': %s", ex.what());
 		return  false;
 	}
+}
+
+void MoveitInterface::reset()
+{
+	m_screenTaskCounter = 0;
+	m_frameStatus = false;
+	m_mazePath.clear();
+	m_mazePath.resize(0);
+	m_callShapeService = false;
+	m_callTextService = false;
+	// m_service_map["localize_board"].srv_response.success = false;
+
 }
 
 void MoveitInterface::run()
@@ -631,13 +635,13 @@ void MoveitInterface::run()
 				case InterfaceState::BOARD_DETECTION:
 					{
 						RCLCPP_INFO(this->get_logger(), "State: BOARD_DETECTION -> WAIT_FOR_RESPONSE");
-						std::cout << "m_waiting_for_response " << m_waiting_for_response << std::endl;
 						if(!m_service_map["localize_board"].srv_response.success)
 						{
 							callTriggerService("localize_board");
 						}
 						else
 							m_state = InterfaceState::WAIT_FOR_RESPONSE;
+						//std::cout << "m_waiting_for_response " << m_waiting_for_response << std::endl;
 						break;
 					}
 				case InterfaceState::WAIT_FOR_RESPONSE:
@@ -646,6 +650,7 @@ void MoveitInterface::run()
 						if (m_frameStatus) {
 							RCLCPP_INFO(this->get_logger(), "Frame received. Proceeding to TF check.");
 							m_service_map["localize_board"].srv_response.success = false;
+							m_waiting_for_response = false;
 							m_state = InterfaceState::CHECK_TF;
 						}
 						break;
@@ -674,6 +679,7 @@ void MoveitInterface::run()
 					{
 						RCLCPP_WARN(this->get_logger(), "State: EXECUTE -> DONE");
 						// RCLCPP_WARN(this->get_logger(), "Proceeding to final task (e.g., planning)...");
+						m_waiting_for_response = false; //To ensure all states are called freshly
 						executeTasks(m_nextTaskType);
 						break;
 					}
@@ -742,7 +748,7 @@ void MoveitInterface::executeTasks(TaskType& task)
 			RCLCPP_ERROR(this->get_logger(),"TaskType: SCREEN_TEXT");
 			bool state = executeScreenText();
 			if(state)
-				m_nextTaskType = TaskType::DROP_STYLUS;
+				m_nextTaskType = TaskType::MAZE;
 			break;
 		}
 
@@ -760,7 +766,7 @@ void MoveitInterface::executeTasks(TaskType& task)
 			RCLCPP_ERROR(this->get_logger(),"TaskType: MAZE");
 			bool state = executeMaze();
 			if(state)
-				m_nextTaskType = TaskType::END;
+				m_nextTaskType = TaskType::DROP_STYLUS;
 			break;
 		}
 		case TaskType::DROP_STYLUS:
@@ -779,13 +785,7 @@ void MoveitInterface::executeTasks(TaskType& task)
 		case TaskType::END:
 		{
 			RCLCPP_ERROR(this->get_logger(),"TaskType: END");
-			m_screenTaskCounter = 0;
-			m_frameStatus = false;
-			// m_shapePoses.poses.clear();
-			// m_shapePoses.poses.resize(0);
-			m_callShapeService = false;
-			m_callTextService = false;
-			// m_service_map["localize_board"].srv_response.success = false;
+			reset();
 			m_state = InterfaceState::DONE;
 			break;
 		}
@@ -795,7 +795,59 @@ void MoveitInterface::executeTasks(TaskType& task)
 
 bool MoveitInterface::executeMaze()
 {
+	std::string target_frame = "base_link";
+	std::string source_frame = "blue_button";
+	std::string current_task = "solve_maze";
 
+	try
+	{
+		geometry_msgs::msg::TransformStamped tfstamped;
+		tfstamped.transform.translation.x = m_transformedPoses[source_frame].position.x;
+		tfstamped.transform.translation.y = m_transformedPoses[source_frame].position.y;
+		tfstamped.transform.translation.z = m_transformedPoses[source_frame].position.z;
+		tfstamped.transform.rotation.x = m_transformedPoses[source_frame].orientation.x;
+		tfstamped.transform.rotation.y = m_transformedPoses[source_frame].orientation.y;
+		tfstamped.transform.rotation.z = m_transformedPoses[source_frame].orientation.z;
+		tfstamped.transform.rotation.w = m_transformedPoses[source_frame].orientation.w;
+
+		// 
+		//  = m_tfBuffer.lookupTransform(target_frame, source_frame, this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+		std::cout << "m_mazePath " << m_mazePath.size() << std::endl;
+
+		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+		named_poses["screen_align_pose"] = m_transformedPoses["align_frame"];
+		int index = 10;
+		for(auto pose : m_mazePath)
+		{
+			geometry_msgs::msg::Pose transformed_maze_pose;
+			// getTf(pose,transformed_maze_pose,tfstamped,target_frame,source_frame);
+			tf2::doTransform(pose, transformed_maze_pose, tfstamped);
+			transformed_maze_pose.orientation = m_transformedPoses["align_frame"].orientation;
+			std::string name = "maze_pathpoint_" + std::to_string(index);
+			RCLCPP_INFO(this->get_logger(),"nameeeee %s", name.c_str());
+			named_poses[name] = transformed_maze_pose;
+			index++;
+		}
+
+		bool validTrajectory = false;
+		validTrajectory = createWaypointTrajectory(current_task, named_poses);
+		if(validTrajectory)
+		{
+			current_task = "retract_maze";
+			validTrajectory = createWaypointTrajectory(current_task, named_poses);
+			return validTrajectory;
+		}
+		else
+		{
+			RCLCPP_INFO(this->get_logger(), "Could not execute maze task");
+			return false;
+		}
+	}
+	catch(const std::exception& e)
+	{
+		std::cerr << e.what() << '\n';
+	}
+	
 }
 
 
@@ -876,20 +928,21 @@ bool MoveitInterface::executeScreenText()
 	std::string source_frame = "";
 	std::string current_task = "";
 
-	if(!m_callTextService)
-	{
+	//@NOTE: Uncomment if testing the screen text task independently - go to screen approach first
+	// if(!m_callTextService) 
+	// {
 
-		current_task = "screen_approach";
-		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-		named_poses["screen_align_pose"] = m_transformedPoses["align_frame"];
-		named_poses["screen"] = m_transformedPoses["screen"];
+	// 	current_task = "screen_approach";
+	// 	std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+	// 	named_poses["screen_align_pose"] = m_transformedPoses["align_frame"];
+	// 	named_poses["screen"] = m_transformedPoses["screen"];
 
-		bool validTrajectory = false;
-		validTrajectory = createWaypointTrajectory(current_task, named_poses);
-		m_callTextService = validTrajectory;
-		return false;
-	}
-	else
+	// 	bool validTrajectory = false;
+	// 	validTrajectory = createWaypointTrajectory(current_task, named_poses);
+	// 	m_callTextService = validTrajectory;
+	// 	return false;
+	// }
+	// else
 	{
 		if(!m_service_map["detect_text"].srv_response.success)// && m_srvAttempts < 3)
 		{
@@ -910,6 +963,7 @@ bool MoveitInterface::executeScreenText()
         ParsedTask parsedTask;
 		parseTaskCommand(m_screenCommand,parsedTask);
 		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+
 		int repeat_count = 1;
 
 		std::cout << "ID: " << parsedTask.id << " size " <<parsedTask.task_names.size() << "\n";
@@ -947,7 +1001,7 @@ bool MoveitInterface::executeScreenText()
 			}
 			else
 			{
-				current_task = "home_pose";
+				current_task = "retract_align_screen";
 				bool homepose = createWaypointTrajectory(current_task, named_poses);
 				m_callTextService = false;
 				m_taskType = TaskType::END;
@@ -1195,8 +1249,10 @@ bool MoveitInterface::doTask(std::string& current_task, std::map<std::string, ge
 void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_config, const std::map<std::string, geometry_msgs::msg::Pose>& named_poses, std::map<std::string, mtc::solvers::PlannerInterfacePtr>& planners, const std::string& group_name, const std::string& hand_frame)
 {
 
+	RCLCPP_INFO(this->get_logger(),"addStagesFromYaml");
 	for (const auto& stage_node : task_config["stages"])
 	{
+
 		std::string type = stage_node["type"].as<std::string>();
 		std::string name = stage_node["name"].as<std::string>();
 		std::string planner_name = stage_node["planner"].as<std::string>();
@@ -1204,21 +1260,21 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 		double max_distance = 0.1;
 
 		std::string hand_frame_name = "";
-
+		
 		auto getPlanner = [&](const std::string& name) -> mtc::solvers::PlannerInterfacePtr {
 			return planners.at(name);
 		};
-
+		
 		auto planner = getPlanner(planner_name);
 		if(stage_node["hand_frame"]) { hand_frame_name = stage_node["hand_frame"].as<std::string>(); }
 		else hand_frame_name = hand_frame;
-
+		
 		if(stage_node["minmax_dist"])
 		{
 			min_distance = stage_node["minmax_dist"][0].as<double>();
 			max_distance = stage_node["minmax_dist"][1].as<double>();
 		}
-
+		
 		if(stage_node["vel_acc"])
 		{
 			planner->setMaxVelocityScalingFactor(stage_node["vel_acc"][0].as<double>());
@@ -1237,7 +1293,7 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 			stage->setIKFrame(hand_frame);
 
 			std::cout << target_name << std::endl;
-			if(target_name != "home_camera_vertical" && target_name != "home_camera" && target_name != "home_camera_touch")
+			if(target_name != "home_camera_vertical" && target_name != "home_camera" && target_name != "home_camera_touch" && target_name != "home_camera_magnet")
 			{
 				auto pose = named_poses.at(target_name);
 				auto offset_vals = stage_node["offset"];
@@ -1256,6 +1312,10 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 			else if(target_name == "home_camera_touch")
 			{
 				stage->setGoal("home_camera_touch");
+			}
+			else if(target_name == "home_camera_magnet")
+			{
+				stage->setGoal("home_camera_magnet");
 			}
 			else
 			{
@@ -1304,7 +1364,7 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 			int index = 0;
 			for(auto& [path_point_name, path_point] : named_poses)
 			{
-				if(path_point_name == "screen")
+				if(path_point_name == "screen" || path_point_name == "screen_align_pose")
 					continue;
 				auto stage = std::make_unique<mtc::stages::MoveTo>(path_point_name, planner);
 				RCLCPP_INFO(this->get_logger(),"target %s path_point_name %s",target_name.c_str(),  path_point_name.c_str());

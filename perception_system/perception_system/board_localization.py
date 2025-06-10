@@ -470,13 +470,13 @@ class BoardLocalization(Node):
     
             print("now doing rotation")
             cam_R_to_blue = M_world_board[:3, :3]
-            A_position_wrt_blue = np.array([0 , 0.06, 0])
-            B_position_wrt_blue = np.array([-0.02 , 0.06, 0])
-            Back_position_wrt_blue = np.array([-0.01 , 0.07, 0])
-            Up_position_wrt_blue = np.array([-0.01 , 0.08, 0])
-            Down_position_wrt_blue = np.array([-0.01 , 0.06, 0])
-            Left_position_wrt_blue = np.array([-0.00 , 0.07, 0])
-            Right_position_wrt_blue = np.array([-0.02 , 0.07, 0])
+            A_position_wrt_blue = np.array([0 , 0.062, 0])
+            B_position_wrt_blue = np.array([-0.02 , 0.062, 0])
+            Back_position_wrt_blue = np.array([-0.01 , 0.072, 0])
+            Up_position_wrt_blue = np.array([-0.01 , 0.082, 0])
+            Down_position_wrt_blue = np.array([-0.01 , 0.062, 0])
+            Left_position_wrt_blue = np.array([-0.00 , 0.072, 0])
+            Right_position_wrt_blue = np.array([-0.02 , 0.072, 0])
             
             stylus_position_wrt_blue = np.array([-0.115 , -0.01, -0.01])
             align_frame_position_wrt_blue = np.array([-0.1 , 0.05, -0.2])      #estimation

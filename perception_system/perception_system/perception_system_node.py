@@ -1,8 +1,6 @@
 
 from .board_localization import BoardLocalization
 from .realsense import RealSense
-from .shape_detector import ShapeDetector
-from .button_detector import ButtonDetector
 from .detection_task import DetectionNode
 import sys
 

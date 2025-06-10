@@ -183,7 +183,8 @@ class MoveitInterface: public rclcpp::Node
         geometry_msgs::msg::Pose m_screenA, m_screenB, m_screenBackground, m_screenUp, m_screenDown, m_screenLeft, m_screenRIght;
         geometry_msgs::msg::Pose m_preRedButtonPose, m_preBlueButtonPose, m_preStylusPose, m_preMazePose, m_preScreenPose;
         std::map<std::string, geometry_msgs::msg::Pose> m_transformedPoses; 
-
+        std::vector<geometry_msgs::msg::Pose> m_mazePath;
+        
         void isTransformAvailable(geometry_msgs::msg::Pose& input_pose, geometry_msgs::msg::Pose& output_pose, geometry_msgs::msg::TransformStamped& tfstamped, const std::string& target_frame, const std::string& source_frame, double timeout_sec);
         void gripperService(bool&);
         void getTf(geometry_msgs::msg::Pose& input_pose,geometry_msgs::msg::Pose& output_pose, geometry_msgs::msg::TransformStamped& tfstamped, std::string target_frame,std::string source_frame);
@@ -202,4 +203,6 @@ class MoveitInterface: public rclcpp::Node
         void addStagesFromYaml(mtc::Task& task, const YAML::Node& task_config, const std::map<std::string, geometry_msgs::msg::Pose>& named_poses, std::map<std::string, mtc::solvers::PlannerInterfacePtr>& planners, const std::string& group_name, const std::string& ik_frame);
             
         void parseTaskCommand(std::string&,ParsedTask&);
+
+        void reset();
 };
