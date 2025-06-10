@@ -16,8 +16,7 @@ The following hardware components were used in our system:
 - **Stylus holder mount** 
 - **Robothon 2025 Taskboard**
  
-*need labeled photo of the full setup here.*
- 
+![Label](doc/Label.JPG) 
 ---
  
 ## Software Setup
@@ -40,6 +39,7 @@ Our software framework is developed using ROS2 (Robot Operating System). The ove
 - [Moondream](https://github.com/vikhyat/moondream)
 - [Gemini](https://pypi.org/project/google-generativeai/0.3.2/)
 - [MoveIt2](https://github.com/moveit/moveit2)
+- [Moveit Task Constructor](https://moveit.picknik.ai/main/doc/concepts/moveit_task_constructor/moveit_task_constructor.html)
  
 ---
  
@@ -110,7 +110,7 @@ The output text was then passed to the **Gemini 1.5 Flash** model, which was pro
  
 The resulting structured command is then **published to the `/structured_command` ROS topic** for execution.
 
-![Text Command](Text_Command.png)
+![Text Command](doc/Text_Command.png)
  
 ### Task 5: Maze Solving
  
