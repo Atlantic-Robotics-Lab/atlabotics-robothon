@@ -1,0 +1,9 @@
+names:
+  0: blue_button
+  1: red_button
+  2: screen
+  3: maze
+  4: stylus
+  5: task_board
+path: .
+train: train.txt
