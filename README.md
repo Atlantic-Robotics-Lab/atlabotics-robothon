@@ -47,7 +47,7 @@ Our software framework is developed using ROS2 (Robot Operating System). The ove
  
 The overview of the system is illustrated in the diagram below.
  
-![System Overview Diagram](doc/Robothoon_Framework.png)
+![System Overview Diagram](doc/Robothon_Framework.png)
  
 The **vision system** is responsible for detecting and localizing the **Robothon taskboard** within the robot's workspace. It also handles:
  
