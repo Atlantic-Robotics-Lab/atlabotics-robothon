@@ -533,6 +533,11 @@ class BoardLocalization(Node):
             quat_align_frame =quaternion_from_matrix(rot_align_frame)
             
             
+            static_transformStamped_stylus_calibration_pose = TransformStamped()
+            stylus_calibration_position = np.array([0.2192, -0.0566, 0.0330])
+            stylus_calibration_quat = np.array([-0.7071, 0.7071, 0.0, 0.0])
+            
+            
     
             static_transformStamped_A = get_static_transform(frame1, "A", A_wrt_cam, rotation_quat)
             static_transformStamped_B = get_static_transform(frame1, "B", B_wrt_cam, rotation_quat)
@@ -543,9 +548,11 @@ class BoardLocalization(Node):
             static_transformStamped_Left = get_static_transform(frame1, "sq_left", Left_wrt_cam, rotation_quat)
             static_transformStamped_Right = get_static_transform(frame1, "sq_right", Right_wrt_cam, rotation_quat)
             static_transformStamped_align_frame = get_static_transform(frame1, "align_frame", align_frame_position_wrt_cam, quat_align_frame)
+            
+            static_transformStamped_stylus_calibration_pose = get_static_transform(frame2, "stylus_calibration", stylus_calibration_position, stylus_calibration_quat)
         
         
-            transforms = [static_transformStamped_board, static_transform_red, static_transform_blue,static_transform_screen, static_transform_maze, static_transform_stylus, static_transform_task_board, static_transformStamped_A, static_transformStamped_B, static_transformStamped_align_frame, static_transformStamped_Background, static_transformStamped_Up, static_transformStamped_Down, static_transformStamped_Left,static_transformStamped_Right]
+            transforms = [static_transformStamped_board, static_transform_red, static_transform_blue,static_transform_screen, static_transform_maze, static_transform_stylus, static_transform_task_board, static_transformStamped_A, static_transformStamped_B, static_transformStamped_align_frame, static_transformStamped_Background, static_transformStamped_Up, static_transformStamped_Down, static_transformStamped_Left,static_transformStamped_Right, static_transformStamped_stylus_calibration_pose]
 
             for i, t in enumerate(transforms):
                 # if not isinstance(t, TransformStamped):

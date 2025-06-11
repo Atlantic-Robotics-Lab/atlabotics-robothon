@@ -20,7 +20,9 @@ class PipelineServiceNode(Node):
         moondream_key = "" #To be added after registration from Moondream
         google_key = ""
 
-        
+        self.DEFAULT_COMMAND = "1, Background"
+
+
         try:
             self.moondream_model = md.vl(api_key=moondream_key)
             self.get_logger().info("Moondream model loaded.")
@@ -78,58 +80,69 @@ class PipelineServiceNode(Node):
                 #self.get_logger().info("First image received from camera.")
                 self.image_received = True
 
-    def pipeline_callback(self, request, response):
-        self.get_logger().info("service call trigger")
+
+    def extract_task_from_text(self, raw_text: str) -> str:
+        """
+        Parses raw text to find the line containing the actual task.
+        """
+        action_keywords = ['tap', 'swipe', 'move', 'press', 'go', 'drag', 'double', 'three times', 'top']
+        lines = raw_text.strip().split('\n')
+        for line in lines:
+            if any(keyword in line.lower() for keyword in action_keywords):
+                self.get_logger().info(f"Extracted relevant task line: '{line.strip()}'")
+                return line.strip()
+        self.get_logger().warn("No actionable task keyword found in VLM output.")
+        return "false"
+    
+    def _handle_failure(self, response, message: str, is_exception: bool = False):
+        """Helper function to publish a default command and set the service response."""
+        self.get_logger().warn(f"Pipeline failure: {message}. Publishing default command.")
         
-        if not self.image_received:
-            self.get_logger().error("Service called but no image received.")
-            response.success = False
-            response.message = "Error: No image received from camera."
-            return response
+        # Publish the default command
+        msg = String()
+        msg.data = self.DEFAULT_COMMAND
+        self.command_publisher_.publish(msg)
+        self.get_logger().info(f"Published default command: '{msg.data}'")
+        
+        # An exception means the service itself failed to execute properly.
+        # A 'false' return means the service worked, but found no valid task.
+        response.success = True
+        response.message = message
+        return response
 
-        # MOONDREAM
-        task_text = ""
+    def pipeline_callback(self, request, response):
+        self.get_logger().info("Service call triggered. Starting pipeline...")
+        
+        with self.image_lock:
+            if self.latest_image_msg is None:
+                return self._handle_failure(response, "Error: No image received from camera.", is_exception=True)
+            local_image_msg = self.latest_image_msg
+
+        # --- Step 1: Moondream ---
         try:
-            with self.image_lock:
-                local_image_msg = self.latest_image_msg
             cv_image = self.bridge.imgmsg_to_cv2(local_image_msg, "bgr8")
-            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb_image)
-            prompt = "print the text written in the image. Don't return anything if you couldn't detect the text."
-            answer = self.moondream_model.query(pil_image, prompt)["answer"]
-            task_text = answer.strip().split('\n')[-1] # to get only the last line which is the task
-            self.get_logger().info(f"Moondream detected task: '{task_text}'")
+            pil_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
+            answer = self.moondream_model.query(pil_image, "print the text written in the image. If you don't detect any text return false.")["answer"]
+            task_text = self.extract_task_from_text(answer)
+            self.get_logger().info(f"VLM output: '{answer}', Extracted task: '{task_text}'")
 
-            if not task_text or task_text.isspace():
-                self.get_logger().info("Moondream did not find any text in the image.")
-                response.success = False
-                #response.message = "Error: Vision model found no text."
-                return response
+            if task_text == "false":
+                return self._handle_failure(response, "VLM returned 'false' or no actionable task.")
+
         except Exception as e:
-            self.get_logger().error(f"Error during Moondream inference: {e}")
-            response.success = False; response.message = f"Error in vision model: {e}"
-            return response
+            return self._handle_failure(response, f"Error during Moondream inference: {e}", is_exception=True)
 
-        # GEMINI
+        # --- Step 2: Gemini ---
         try:
             full_prompt = self.prompt_template.format(task=task_text)
             api_response = self.gemini_model.generate_content(full_prompt)
-            structured_command = api_response.text.strip().replace('\n', '')
-            cleaned_command = api_response.text.lower().strip().strip("'\"")
-            #self.get_logger().info(f"Taks is: '{structured_command}'")
-            if cleaned_command == 'false':
-                self.get_logger().info("heerere.")
-                response.success = True
-                response.message = "Error: language model found no meaningful task."
-                msg = String()
-                msg.data = "0, A, B"
-                self.command_publisher_.publish(msg)
-                self.get_logger().info(f"Published command to /structured_command topic.")
-                
-                return response
-            
-            self.get_logger().info(f"Taks is: '{structured_command}'")
+            structured_command = api_response.text.strip()
 
+            if structured_command.lower() == 'false':
+                return self._handle_failure(response, "LLM evaluated the task as invalid.")
+            
+            # --- Success Case ---
+            self.get_logger().info(f"Task is: '{structured_command}'")
             msg = String()
             msg.data = structured_command
             self.command_publisher_.publish(msg)
@@ -137,11 +150,82 @@ class PipelineServiceNode(Node):
 
             response.success = True
             response.message = structured_command
+
         except Exception as e:
-            self.get_logger().error(f"Error during Gemini inference: {e}")
-            response.success = False; response.message = f"Error in language model: {e}"
+            return self._handle_failure(response, f"Error during Gemini inference: {e}", is_exception=True)
 
         return response
+    # def pipeline_callback(self, request, response):
+    #     self.get_logger().info("Service call triggered. Starting  VLM and LLM...")
+        
+    #     with self.image_lock:
+    #         if self.latest_image_msg is None:
+    #             self.get_logger().error("Service called but no image has been received.")
+    #             response.success = False
+    #             response.message = "Error: No image received from camera."
+    #             return response
+    #         local_image_msg = self.latest_image_msg
+
+    #     # ---  Moondream Vision Language Model ---
+    #     try:
+    #         cv_image = self.bridge.imgmsg_to_cv2(local_image_msg, "bgr8")
+    #         rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+    #         pil_image = Image.fromarray(rgb_image)
+            
+    #         vlm_prompt = "print the text written in the image. If you don't detect any text return false."
+    #         answer = self.moondream_model.query(pil_image, vlm_prompt)["answer"]
+            
+    #         task_text = self.extract_task_from_text(answer)
+    #         self.get_logger().info(f"VLM raw output: '{answer}', Extracted task: '{task_text}'")
+
+    #         if task_text == "false":
+    #             self.get_logger().info("VLM returned 'false'.")
+    #             response.success = True 
+    #             response.message = "No actionable task found in the image."
+    #             msg = String()
+    #             msg.data = "1, Background"
+    #             self.command_publisher_.publish(msg)
+    #             return response
+
+    #     except Exception as e:
+    #         self.get_logger().error(f"Error during Moondream inference: {e}")
+    #         response.success = False
+    #         response.message = f"Error in vision model: {e}"
+    #         return response
+
+    #     # GEMINI 
+    #     try:
+            
+    #         full_prompt = self.prompt_template.format(task=task_text)
+    #         api_response = self.gemini_model.generate_content(full_prompt)
+    #         structured_command = api_response.text.strip().replace('\n', '')
+    #         cleaned_command = api_response.text.lower().strip().strip("'\"")
+    #         #self.get_logger().info(f"Taks is: '{structured_command}'")
+    #         if cleaned_command == 'false':
+    #             self.get_logger().info("heerere.")
+    #             response.success = True
+    #             response.message = "Error: language model found no meaningful task."
+    #             msg = String()
+    #             msg.data = "1, Background"
+    #             self.command_publisher_.publish(msg)
+    #             self.get_logger().info(f"Published command to /structured_command topic.")
+                
+    #             return response
+            
+    #         self.get_logger().info(f"Taks is: '{structured_command}'")
+
+    #         msg = String()
+    #         msg.data = structured_command
+    #         self.command_publisher_.publish(msg)
+    #         self.get_logger().info(f"Published command to /structured_command topic.")
+
+    #         response.success = True
+    #         response.message = structured_command
+    #     except Exception as e:
+    #         self.get_logger().error(f"Error during Gemini inference: {e}")
+    #         response.success = False; response.message = f"Error in language model: {e}"
+
+    #     return response
 
 def main(args=None):
     rclpy.init(args=args)
@@ -153,3 +237,5 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
+

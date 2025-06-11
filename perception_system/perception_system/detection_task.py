@@ -31,6 +31,11 @@ class DetectionNode(Node):
         self.srv = self.create_service(Trigger, '/taskboard/detect_button', self.detection_callback)
         self.srv = self.create_service(Trigger, '/taskboard/detect_shape', self.shape_callback)
         
+        self.color_pose_pub = self.create_publisher(PoseArray, '/color_sort/poses', 10)
+        self.color_status_pub = self.create_publisher(Bool, '/color_sort/status', 10)
+        
+        self.srv = self.create_service(Trigger, '/color_sort_service', self.color_sort_callback)
+        
         self.get_logger().info("Detection service ready.")
 
 
@@ -200,11 +205,12 @@ class DetectionNode(Node):
             self.get_logger().warn("No shape detected.")
             pose = Pose()
             pose_array = PoseArray()
+            pose_array.header.stamp = self.get_clock().now().to_msg()
+            pose_array.header.frame_id = "camera_color_optical_frame"
             feature_camera = np.array(self.rs.deproject_pixel_to_known_height(0, 0, 100.0)) / 1000.0
             print(f"feature_camera {feature_camera}",flush=True)
             pose.position.x, pose.position.y, pose.position.z = feature_camera[0], feature_camera[1], feature_camera[2]
             pose_array.poses.append(pose)
-            pose_array.poses.clear()
             self.points_pub.publish(pose_array)
             self.result_pub.publish(String(data="No shape detected"))
 
@@ -393,6 +399,135 @@ class DetectionNode(Node):
         # plt.show()
 
         return shape_type, shape_pixels
+    
+    
+    def color_sort_callback(self, request, response):
+        threading.Thread(target=self.run_color_sort, daemon=True).start()
+        # result = self.run_color_sort()
+        # if result:
+            # self.color_status_pub.publish(Bool(data=True))
+        empty_array = PoseArray()
+        empty_array.poses.clear()
+        self.points_pub.publish(empty_array)
+        response.success = True
+        response.message = "Color sort detection complete"
+        # else:
+        #     self.color_status_pub.publish(Bool(data=False))
+            # response.success = False
+            # response.message = "No colors detected"
+        return response
+
+
+
+    def run_color_sort(self):
+        self.rs.acquireOnceBoth()
+        frame = self.rs.getColorFrame()
+        depth = self.rs.getDistanceFrame()
+        if frame is None:
+            self.get_logger().error("No frame received.")
+            return None
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        lower_red1 = np.array([0, 150, 100])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([170, 150, 100])
+        upper_red2 = np.array([179, 255, 255])
+        
+        lower_blue = np.array([100, 150, 100])
+        upper_blue = np.array([130, 255, 255])
+        
+        lower_yellow = np.array([20, 100, 100])
+        upper_yellow = np.array([35, 255, 255])
+
+        lower_green = np.array([40, 50, 50])
+        upper_green = np.array([85, 255, 255])
+
+
+        red_mask = cv2.inRange(hsv, lower_red1, upper_red1) | cv2.inRange(hsv, lower_red2, upper_red2)
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        green_mask = cv2.inRange(hsv, lower_green, upper_green)
+
+
+        def get_centers(mask):
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            centers = []
+            for cnt in contours:
+                if cv2.contourArea(cnt) > 200:
+                    M = cv2.moments(cnt)
+                    if M["m00"] > 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        centers.append((cx, cy))
+            return centers
+
+        red_centers = get_centers(red_mask)
+        blue_centers = get_centers(blue_mask)
+        yellow_centers = get_centers(yellow_mask)
+        green_centers = get_centers(green_mask)
+
+        # Sort left-to-right
+        yellow_centers = sorted(yellow_centers, key=lambda pt: pt[0])
+        green_centers = sorted(green_centers, key=lambda pt: pt[0])
+
+        
+        red_centers = sorted(red_centers, key=lambda pt: pt[0])   # Sort red left to right
+        blue_centers = sorted(blue_centers, key=lambda pt: pt[0]) # Sort blue left to right
+
+
+        now = self.get_clock().now().to_msg()
+        
+        # Combine all colors into one loop and publish each with its label in frame_id (debug-style)
+        for color_label, centers in [
+            ("red", red_centers),
+            ("blue", blue_centers),
+            ("yellow", yellow_centers),
+            ("green", green_centers)
+        ]:
+            pose_array = PoseArray()
+            pose_array.header.stamp = now
+            pose_array.header.frame_id = color_label  # WARNING: Only for temporary debugging
+
+            for x, y in centers:
+                pose = Pose()
+                depth_value = depth[y, x]
+                # point_3d = np.array(self.rs.deproject_pixel_to_known_height(x, y, depth_value)) / 1000.0
+                point_3d = np.array(self.rs.deproject(x, y, depth_value)) / 1000.0
+            # (x, y, depth_value)) / 1000.0
+                pose.position.x, pose.position.y, pose.position.z = point_3d
+                pose_array.poses.append(pose)
+
+            # self.color_pose_pub.publish(pose_array)
+            self.points_pub.publish(pose_array)
+            self.get_logger().info(f"Published {len(pose_array.poses)} {color_label} poses.")
+
+            
+            
+        debug_img = frame.copy()
+
+        def draw_boxes(centers, color_name):
+            for x, y in centers:
+                cv2.rectangle(debug_img, (x - 10, y - 10), (x + 10, y + 10), (0, 255, 0), 2)
+                cv2.putText(debug_img, color_name, (x - 10, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+
+        # Loop over all colors and draw their boxes
+        for color_label, centers in [
+            ("Red", red_centers),
+            ("Blue", blue_centers),
+            ("Yellow", yellow_centers),
+            ("Green", green_centers)
+        ]:
+            draw_boxes(centers, color_label)
+
+        # plt.figure(figsize=(8, 6))
+        # plt.imshow(cv2.cvtColor(debug_img, cv2.COLOR_BGR2RGB))
+        # plt.title("Detected Color Objects with Bounding Boxes")
+        # plt.axis("off")
+        # plt.show()
+        ## ----------------------------------------------------
+
+        return any([red_centers, blue_centers, yellow_centers, green_centers])
 
 def main(args=None):
     rclpy.init(args=args)

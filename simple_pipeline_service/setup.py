@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'pipeline_node = simple_pipeline_service.pipeline_node:main',
+            'pipeline_node_byod = simple_pipeline_service.pipeline_node_byod:main',
         ],
     },
 )

@@ -171,6 +171,8 @@ class MoveitInterface: public rclcpp::Node
         bool m_completed{false};
 
         geometry_msgs::msg::PoseArray m_shapePoses;
+        std::vector<geometry_msgs::msg::PoseArray> m_detectionPoses;
+
         tf2_ros::Buffer m_tfBuffer;
         std::shared_ptr<tf2_ros::TransformListener> m_tfListener;
         InterfaceState m_state{InterfaceState::IDLE};
@@ -203,6 +205,6 @@ class MoveitInterface: public rclcpp::Node
         void addStagesFromYaml(mtc::Task& task, const YAML::Node& task_config, const std::map<std::string, geometry_msgs::msg::Pose>& named_poses, std::map<std::string, mtc::solvers::PlannerInterfacePtr>& planners, const std::string& group_name, const std::string& ik_frame);
             
         void parseTaskCommand(std::string&,ParsedTask&);
-
+        bool executeCustomTask();
         void reset();
 };

@@ -9,7 +9,7 @@ move_group:
 
 execute: false
 planning : true
-
+custom_task: false
 
 tasks:
   speed_test:
@@ -147,7 +147,7 @@ tasks:
         type: move_relative
         planner: cartesian
         direction: [-1.0, 0.0, 0.0]
-        minmax_dist: [0.001, 0.001]
+        minmax_dist: [0.003, 0.003]
         frame: ee_gripper
         vel_acc: [0.1, 0.1]
 
@@ -185,7 +185,7 @@ tasks:
         type: move_to
         planner: interpolation
         target: screen
-        offset: [0.054, -0.033, 0.03]
+        offset: [0.054, -0.033, 0.04]
 
   screen_draw:
     hand_frame: ee_touch
@@ -207,7 +207,7 @@ tasks:
         type: move_to
         planner: interpolation
         target: screen
-        offset: [0.054, -0.033, 0.03]
+        offset: [0.054, -0.033, 0.04]
         vel_acc: [0.1, 0.1]
 
   screen_text:
@@ -217,7 +217,7 @@ tasks:
         type: move_to_path
         planner: interpolation
         target: screen_text_poses
-        offset: [0.0, 0.0, -0.005]
+        offset: [0.0, 0.0, -0.007]
         vel_acc: [0.05, 0.05]
 
       - name: retract_screen
@@ -257,6 +257,14 @@ tasks:
         planner: interpolation
         target: stylus_pose
         offset: [0.0, 0.0, 0.1]
+      
+      - name: align_stylus_centre
+        type: move_relative
+        planner: cartesian
+        direction: [0.0, 1.0, 0.0]
+        minmax_dist: [0.007, 0.007]
+        frame: ee_gripper
+        vel_acc: [0.2, 0.2]
 
       - name: align_stylus
         type: move_relative
@@ -305,3 +313,38 @@ tasks:
         planner: interpolation
         target: home_camera
         vel_acc: [1.0, 1.0]
+
+  retract_stylus_invert:
+    hand_frame: ee_touch
+    stages:
+      - name: stylus_calibration
+        type: move_to
+        planner: interpolation
+        target: stylus_calibration
+        vel_acc: [0.2, 0.2]
+
+      - name: stylus_calibration_precise
+        type: move_to
+        planner: interpolation
+        target: stylus_calibration_precise
+        offset: [0.0, 0.0, 0.1]
+        vel_acc: [0.2, 0.2]
+
+      - name: press_stytlus_calib
+        type: move_relative
+        planner: cartesian
+        target: stylus_calibration_precise
+        direction: [0.0, 0.0, -1.0]
+        minmax_dist: [0.10, 0.10]
+
+      - name: stylus_calibration
+        type: move_to
+        planner: interpolation
+        target: stylus_calibration
+        vel_acc: [0.2, 0.2]
+
+      - name: move_home_touch
+        type: move_to
+        planner: interpolation
+        target: home_camera_touch
+        vel_acc: [0.2, 0.2]

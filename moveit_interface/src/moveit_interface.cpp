@@ -31,6 +31,12 @@ MoveitInterface::MoveitInterface(const rclcpp::NodeOptions & options): Node("mov
 		"detect_text"
 	};
 
+	m_service_map["color_sort"] = {
+		this->create_client<std_srvs::srv::Trigger>("/color_sort_service"),
+		TaskType::BYOD,
+		"color_sort"
+	};
+
 	m_gripperSrv = this->create_client<gripper_srv::srv::GripperService>("/gripper_service");
 
 	m_triggerTask = this->create_service<std_srvs::srv::Trigger>("trigger_task",std::bind(&MoveitInterface::triggerTaskCallback, this, std::placeholders::_1, std::placeholders::_2));
@@ -70,7 +76,10 @@ MoveitInterface::~MoveitInterface()
 void MoveitInterface::triggerTaskCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
 	m_completed = false;
-	m_state = InterfaceState::IDLE;
+	if(!m_config["custom_task"].as<bool>())
+	{
+		m_state = InterfaceState::IDLE;
+	}	
 	response->success = true;
 	response->message = "Task tate trigger set";
 }
@@ -99,6 +108,7 @@ void MoveitInterface::pointsCallback(const geometry_msgs::msg::PoseArray::Shared
 	else
 	{
 		m_shapePoses = *msg;
+		m_detectionPoses.push_back(*msg);
 		for (size_t i = 0; i < msg->poses.size(); ++i) {
 			const auto& pose = msg->poses[i];
 			RCLCPP_INFO(this->get_logger(), "Point[%zu]: [%.2f, %.2f, %.2f]", i, pose.position.x, pose.position.y, pose.position.z);
@@ -608,6 +618,8 @@ void MoveitInterface::reset()
 	m_frameStatus = false;
 	m_mazePath.clear();
 	m_mazePath.resize(0);
+	m_detectionPoses.clear();
+	m_detectionPoses.resize(0);
 	m_callShapeService = false;
 	m_callTextService = false;
 	// m_service_map["localize_board"].srv_response.success = false;
@@ -618,7 +630,11 @@ void MoveitInterface::run()
 {
 	// m_movegroupInterface = std::make_shared<moveit::planning_interface::MoveGroupInterface>(this->shared_from_this(), "ur_manipulator");
 	// m_state = InterfaceState::IDLE;
-	// m_state = InterfaceState::CHECK_TF;
+	if(m_config["custom_task"].as<bool>())
+	{
+		m_nextTaskType =  TaskType::BYOD;
+		m_state = InterfaceState::EXECUTE;
+	}
 
 	m_completed = true;
 	while (rclcpp::ok())
@@ -730,7 +746,7 @@ void MoveitInterface::executeTasks(TaskType& task)
 			RCLCPP_ERROR(this->get_logger(),"TaskType: GRAB_STYLUS_TOUCH");
 			bool state = executeGrabStylus(task);
 			if(state)
-				m_nextTaskType = TaskType::SCREEN_SHAPE;
+				m_nextTaskType = TaskType::GRAB_STYLUS_MAGNET;
 			break;
 		}
 
@@ -755,9 +771,9 @@ void MoveitInterface::executeTasks(TaskType& task)
 		case TaskType::GRAB_STYLUS_MAGNET:
 		{
 			RCLCPP_ERROR(this->get_logger(),"TaskType: GRAB_STYLUS_MAGNET");
-			bool state = true;
+			bool state = executeGrabStylus(task);
 			if(state)
-				m_nextTaskType = TaskType::MAZE;
+				m_nextTaskType = TaskType::SCREEN_SHAPE;
 			break;
 		}
 
@@ -780,6 +796,9 @@ void MoveitInterface::executeTasks(TaskType& task)
 		case TaskType::BYOD:
 		{
 			RCLCPP_ERROR(this->get_logger(),"TaskType: BYOD");
+			bool state = executeCustomTask();
+			if(state)
+				m_nextTaskType = TaskType::END;
 			break;
 		}
 		case TaskType::END:
@@ -881,6 +900,7 @@ bool MoveitInterface::executeDropStylus()
 
 bool MoveitInterface::executeGrabStylus(TaskType& taskType)
 {
+	std::string current_task = ""; 
 	if(taskType == TaskType::GRAB_STYLUS_TOUCH)
 	{	
 		bool gripper_state = false;
@@ -916,6 +936,24 @@ bool MoveitInterface::executeGrabStylus(TaskType& taskType)
 	}
 	else if(taskType == TaskType::GRAB_STYLUS_MAGNET)
 	{
+		current_task = "retract_stylus_invert"; 
+		geometry_msgs::msg::TransformStamped tfstamped = m_tfBuffer.lookupTransform("base_link", "stylus_calibration", this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+		geometry_msgs::msg::Pose calibPose;
+		calibPose.position.x = tfstamped.transform.translation.x;
+		calibPose.position.y = tfstamped.transform.translation.y;
+		calibPose.position.z = tfstamped.transform.translation.z;
+		calibPose.orientation.x = tfstamped.transform.rotation.x;
+		calibPose.orientation.y = tfstamped.transform.rotation.y;
+		calibPose.orientation.z = tfstamped.transform.rotation.z;
+		calibPose.orientation.w = tfstamped.transform.rotation.w;
+
+		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+
+		named_poses["stylus_calibration_precise"] = calibPose;
+
+		bool validTrajectory = false;
+		validTrajectory = createWaypointTrajectory(current_task, named_poses);
+		return validTrajectory;
 
 	}
 
@@ -1193,6 +1231,91 @@ bool MoveitInterface::executeButtonPress()
 	}
 }
 
+bool MoveitInterface::executeCustomTask()
+{
+	std::string target_frame = "";
+	std::string source_frame = "";
+	std::string current_task = "";
+
+	{
+		std::cout << " stat " << m_service_map["color_sort"].srv_response.success << std::endl;
+		if(!m_service_map["color_sort"].srv_response.success)
+		{
+			callTriggerService("color_sort");
+			return false;
+		}
+
+		if (m_detectionPoses.empty())
+		{
+			RCLCPP_INFO(this->get_logger(),"Waiting for detection");
+			// m_service_map["color_sort"].srv_response.success = false;
+			return false;
+		}
+			
+		if (m_screenCommand == "")
+		{
+			RCLCPP_INFO(this->get_logger(),"Waiting for m_screenCommand");
+			return false;
+		}
+
+		current_task = m_screenCommand; //Input from topic
+		target_frame = "base_link";
+		source_frame = "camera_color_optical_frame";
+
+		std::map<std::string, std::vector<geometry_msgs::msg::Pose>> sortingPoses;
+
+		try
+		{
+			RCLCPP_INFO(this->get_logger(), "%d ",m_detectionPoses.size());
+			geometry_msgs::msg::TransformStamped tfstamped = m_tfBuffer.lookupTransform(target_frame, source_frame, this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+			geometry_msgs::msg::TransformStamped tfstamped_gripper = m_tfBuffer.lookupTransform(target_frame, "ee_touch", this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+
+			std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+			// int index = 0; //Lexographical comparison to be handled further
+			for(auto detection_array : m_detectionPoses)
+			{
+				std::string name = detection_array.header.frame_id + "_object";
+				for (auto pose : detection_array.poses)
+				{
+					geometry_msgs::msg::Pose objPose;
+					getTf(pose,objPose,tfstamped,target_frame,source_frame);
+					objPose.orientation = tfstamped_gripper.transform.rotation;
+					sortingPoses[name].push_back(objPose);
+				}
+				// index++;
+			}
+
+			RCLCPP_INFO(this->get_logger(), "%d ",sortingPoses.size());
+
+			for (const auto& [bin, poses] : sortingPoses) {
+				RCLCPP_INFO(this->get_logger(), "Bin: %s", bin.c_str());
+				for (const auto& pose : poses) {
+					RCLCPP_INFO(this->get_logger(), "  x: %.2f y: %.2f z: %.2f",
+								pose.position.x, pose.position.y, pose.position.z);
+				}
+			}
+
+
+			for (const auto& [key, pose_vector] : sortingPoses) {
+				if (!pose_vector.empty()) {
+					RCLCPP_INFO(this->get_logger(), "key: %s", key.c_str());
+					named_poses[key] = pose_vector[0];  // or whatever logic you want
+				}
+			}
+			
+			bool validTrajectory = false;
+			validTrajectory = createWaypointTrajectory(current_task, named_poses);
+			m_service_map["color_sort"].srv_response.success = false;
+			return validTrajectory;
+		}
+		catch (const tf2::TransformException & ex) {
+			RCLCPP_INFO(this->get_logger(), "Could not transform 'base_link' to 'camera': %s", ex.what());
+			return  false;
+		}
+	}
+}
+
+
 void MoveitInterface::setupPlanningScene()
 {
 	moveit_msgs::msg::CollisionObject object2;
@@ -1293,7 +1416,7 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 			stage->setIKFrame(hand_frame);
 
 			std::cout << target_name << std::endl;
-			if(target_name != "home_camera_vertical" && target_name != "home_camera" && target_name != "home_camera_touch" && target_name != "home_camera_magnet")
+			if(target_name != "home_camera_vertical" && target_name != "home_camera" && target_name != "home_camera_touch" && target_name != "home_camera_magnet" && target_name != "stylus_calibration")
 			{
 				auto pose = named_poses.at(target_name);
 				auto offset_vals = stage_node["offset"];
@@ -1316,6 +1439,10 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 			else if(target_name == "home_camera_magnet")
 			{
 				stage->setGoal("home_camera_magnet");
+			}
+			else if(target_name == "stylus_calibration")
+			{
+				stage->setGoal("stylus_calibration");
 			}
 			else
 			{
