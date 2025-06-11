@@ -174,11 +174,11 @@ git clone https://github.com/Atlantic-Robotics-Lab/atlabotics-robothon.git
 ```
 
 - The robot URDF requires change and can be replaced by the file available in the [Universal_Robots_ROS2_Description](https://github.com/UniversalRobots/Universal_Robots_ROS2_Description/tree/humble) repository.
-- ![URDF macro](doc/modified_files/ur_macro.xacro)
+- [URDF macro](doc/modified_files/ur_macro.xacro)
 
 - From the [Universal_Robots_ROS2_Driver](https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/tree/humble), the SRDF and MOVEIT config launch require update to ensure the fixed configurations and moveit task constructor can be executed.
-- ![SRDF](doc/modified_files/ur_macro.srdf.xacro)
-- ![moveit_config](doc/modified_files/ur_moveit.launch.py)
+- [SRDF](doc/modified_files/ur_macro.srdf.xacro)
+- [moveit_config](doc/modified_files/ur_moveit.launch.py)
 
 
 > **NOTE**
