@@ -16,7 +16,7 @@ The following hardware components were used in our system:
 - **Stylus holder mount** 
 - **Robothon 2025 Taskboard**
  
-![Label](doc/Label.JPG) 
+![Label](doc/images/Label.JPG) 
 ---
  
 ## Software Setup
@@ -47,7 +47,7 @@ Our software framework is developed using ROS2 (Robot Operating System). The ove
  
 The overview of the system is illustrated in the diagram below.
  
-![System Overview Diagram](doc/Robothon_Framework.png)
+![System Overview Diagram](doc/images/Robothon_Framework.png)
  
 The **vision system** is responsible for detecting and localizing the **Robothon taskboard** within the robot's workspace. It also handles:
  
@@ -68,7 +68,7 @@ Once the taskboard is localized and the positions of its components are transfor
 - We can publish and vizualize the different elements' frames with **RViz**.
 - **Transformations** between any two coordinate frames can be obtained using the **`tf2`** library.
  
-![YOLO8 Inference](doc/Yolo8.png)
+![YOLO8 Inference](doc/images/Yolo8.png)
  
 ### Task 2: Button Detection
  
@@ -78,7 +78,7 @@ Once the taskboard is localized and the positions of its components are transfor
 - Else publish No glowing button detected.
 - Based on the published message, the robot presses the buttons which are already detected in the localization from **Task 1**.
  
-![Blue Detection Diagram](doc/Blue_Detection.png)
+![Blue Detection Diagram](doc/images/Blue_Detection.png)
  
  
 ### Task 3: Shape Detection
@@ -89,7 +89,7 @@ At this point the image maybe distorted so we use `fitEllipse` and `approxPolyDP
 - The ordered pixel endpoints of the detected shape are published to the ROS topic `/detection_point` for tracing.
  
  
-![Shape Detection](doc/Shape_Detection.png)
+![Shape Detection](doc/images/Shape_Detection.png)
  
  
  
@@ -110,7 +110,7 @@ The output text was then passed to the **Gemini 1.5 Flash** model, which was pro
  
 The resulting structured command is then **published to the `/structured_command` ROS topic** for execution.
 
-![Text Command](doc/Text_Command.png)
+![Text Command](doc/images/Text_Command.png)
  
 ### Task 5: Maze Solving
  
@@ -167,43 +167,54 @@ pip install google-generativeai
 sudo apt install ros-humble-moveit
 ```
  
- Then run,
+#### 8. Clone the atlabotics-robothon repository
 
 ```bash
 git clone https://github.com/Atlantic-Robotics-Lab/atlabotics-robothon.git
 ```
 
+- The robot URDF requires change and can be replaced by the file available in the [Universal_Robots_ROS2_Description](https://github.com/UniversalRobots/Universal_Robots_ROS2_Description/tree/humble) repository.
+- ![URDF macro](doc/modified_files/ur_macro.xacro)
+
+- From the [Universal_Robots_ROS2_Driver](https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/tree/humble), the SRDF and MOVEIT config launch require update to ensure the fixed configurations and moveit task constructor can be executed.
+- ![SRDF](doc/modified_files/ur_macro.srdf.xacro)
+- ![moveit_config](doc/modified_files/ur_moveit.launch.py)
+
+
+> **NOTE**
+- Add API keys for moondrean2 and gemini 1.5 flash required for running the simple_service_pipeline - for the VLM and LLM, which will otherwise not work.
+[pipeline_node.py](simple_pipeline_service/simple_pipeline_service/pipeline_node.py)
+
+- Modify the absolute path which contains the training dataset information and trained model [board_localization_launch.py](perception_system/launch/board_localization_launch.py)
+
+- Modify the absolute the path which contains the path to the maze_path.csv [moveit_interface](https://github.com/Atlantic-Robotics-Lab/atlabotics-robothon/blob/759f433dd87736323bb723badb569aae4162b11b/moveit_interface/src/moveit_interface.cpp#L604)
+
 To start the system, following launchers are required:
  
 - UR5 launcher: This will launch the robot.
-- Moveit launcher:
-- realsense launcher: This will launch the realsense node and start publishing camera frames.
-- MTC:
-- Perception system launcher: Perception launcher will make the services for board localization, glowing button detection, shape detection and text command detection ready.
-- Final task handler: This is responsible for calling all services and running the program sequentially.
+- Moveit launcher: This will launch the moveit configuration with task constructors
+- realsense launcher: This will launch the realsense node and start publishing camera frames with the aligned depth topic enabled.
+- Gripper launcher: This will launch the server to send gripper service requests.
+- Pipeline Launcher: This will launch the VLM and LLM models that will be triggered during text detection. 
+- Perception system launcher: This will launch all the services related to board localization, glowing button detection, shape detection and text command detection.
+- Moveit Interface: This is the main node that handles all task execution by calling services and managing the execution order during operation.
 
 Run the following commands sequentially to launch them
 
 ```bash
 ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur5e robot_ip:=192.168.x.x launch_rviz:=true
-ros2 launch ur_moveit_config ur_moveit_mtc.launch.py ur_type:=ur5e robot_ip:=192.168.x.x
+ros2 launch ur_moveit_config ur_moveit.launch.py ur_type:=ur5e robot_ip:=192.168.x.x
 ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
-ros2 launch moveit_interface moveit_interface.launch.py  ur_type:=ur5e robot_ip:=192.168.x.x
-ros2 launch perception_system board_localization_launch.py
 ros2 launch robotiq_hande_ros2_driver gripper_bringup.launch.py robot_ip:=192.168.x.x
-ros2 run simple_pipeline_service pipeline_node
+ros2 launch simple_pipeline_service pipeline.launch.py
+ros2 launch perception_system board_localization_launch.py
+ros2 launch moveit_interface moveit_interface.launch.py  ur_type:=ur5e robot_ip:=192.168.x.x
 ```
-Note:
-- Add API keys for moondrean2 and gemini 1.5 flash required for running the simple_service_pipeline - for the VLM and LLM, which will otherwise not work.
- ( Refer - simple_pipeline_service/simple_pipeline_service/pipeline_node.py )
-- Modify the absolute path which contains the training dataset information and trained model ( Refer - perception_system/launch/board_localization_launch.py )
-
 
 To start task execution, trigger the service as follows:
 ```bash
 ros2 service call /trigger_task std_srvs/srv/Trigger {}\
 ```
-   
 
 ---
  

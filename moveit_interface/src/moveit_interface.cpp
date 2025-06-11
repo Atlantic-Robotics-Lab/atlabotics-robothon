@@ -387,15 +387,15 @@ void MoveitInterface::gripperService(bool& state)
   auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
 	if(state) //Open
 	{
-		request->position = 255;
-		request->speed = 255;
-		request->force = 128;	
+		request->position = m_config["gripper"]["open"]["position"].as<int>();
+		request->speed 	  = m_config["gripper"]["open"]["speed"].as<int>();
+		request->force 	  = m_config["gripper"]["open"]["force"].as<int>();
 	}
 	else //Close
 	{
-		request->position = 0;
-		request->speed = 64;
-		request->force = 1;
+		request->position = m_config["gripper"]["close"]["position"].as<int>();
+		request->speed 	  = m_config["gripper"]["close"]["speed"].as<int>();
+		request->force 	  = m_config["gripper"]["close"]["force"].as<int>();
 	}
 	
 	m_waiting_for_gripper_response = true;

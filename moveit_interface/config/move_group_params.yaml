@@ -7,6 +7,17 @@ move_group:
   end_effector_link: "tool0"
   pose_reference_frame: "base_link"
 
+gripper:
+  open:
+    position: 255
+    speed: 255
+    force: 128
+  close:
+    position: 0
+    speed: 64
+    force: 1
+
+
 execute: false
 planning : true
 custom_task: false

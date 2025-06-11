@@ -66,8 +66,6 @@
 using moveit::planning_interface::MoveGroupInterface;
 namespace mtc = moveit::task_constructor;
 
-
-// class MoveitInterface: public rclcpp::Node, public std::enable_shared_from_this<MoveitInterface>
 class MoveitInterface: public rclcpp::Node
 {
     public:
