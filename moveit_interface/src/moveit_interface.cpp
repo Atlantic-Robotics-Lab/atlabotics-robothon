@@ -135,190 +135,21 @@ void MoveitInterface::button_status_callback(const std_msgs::msg::String::Shared
 	m_buttonStatus = msg->data.c_str();
 }
 
-void MoveitInterface::printRobotTrajectory(const moveit_msgs::msg::RobotTrajectory &trajectory) {
-	RCLCPP_INFO(rclcpp::get_logger("print_trajectory"), "Trajectory points:");
-	//   for (size_t i = 0; i < trajectory.joint_trajectory.points.size(); ++i) {
-	//       const auto &point = trajectory.joint_trajectory.points[i];
-	//       RCLCPP_INFO(rclcpp::get_logger("print_trajectory"), "Point %zu:", i + 1);
-	//       RCLCPP_INFO(rclcpp::get_logger("print_trajectory"), "Positions:");
-	//       for (size_t j = 0; j < point.positions.size(); ++j) {
-	//           RCLCPP_INFO(rclcpp::get_logger("print_trajectory"), "  Joint %zu: %f", j + 1, point.positions[j]);
-	//       }
-	//   }
 
-	//   for (size_t i = 0; i < trajectory.multi_dof_joint_trajectory.points.size(); ++i) {
-	//     const auto &point = trajectory.multi_dof_joint_trajectory.points[i];
-	//     RCLCPP_INFO(rclcpp::get_logger("multi_dof_joint_trajectory"), "Point %zu:", i + 1);
-	//     RCLCPP_INFO(rclcpp::get_logger("multi_dof_joint_trajectory"), "Positions:");
-	//     for (size_t j = 0; j < point.transforms.size(); ++j) {
-	//         RCLCPP_INFO(rclcpp::get_logger("print_trajectory"), "  TF trans: %f %f %f ", point.transforms[j].translation.x, point.transforms[j].translation.y, point.transforms[j].translation.z);
-	//         RCLCPP_INFO(rclcpp::get_logger("print_trajectory"), "  Tf rot: %f %f %f %f ", point.transforms[j].rotation.x,point.transforms[j].rotation.y,point.transforms[j].rotation.z,point.transforms[j].rotation.w);
-
-	//     }
-	// }
-
-	std::string planning_frame = m_movegroupInterface->getPlanningFrame();
-	std::cout<< "planning_frame "<< planning_frame<<std::endl;
-	std::cout<< "trajectory_frame "<< trajectory.joint_trajectory.header.frame_id <<std::endl;
-	std::cout<< "joint_trajectory size " << trajectory.joint_trajectory.points.size() << std::endl;
-
-
-}
-
-void MoveitInterface::writeTrajectoryToPickle(const moveit_msgs::msg::RobotTrajectory &trajectory){
-	// Convert RobotTrajectory message to a dictionary
-	YAML::Node trajectory_dict;
-	trajectory_dict["joint_names"] = trajectory.joint_trajectory.joint_names;
-	trajectory_dict["points"] = YAML::Load("[]");
-
-	for (size_t i = 0; i < trajectory.joint_trajectory.points.size(); ++i)
-	{
-		YAML::Node point;
-		point["positions"] = trajectory.joint_trajectory.points[i].positions;
-		point["velocities"] = trajectory.joint_trajectory.points[i].velocities;
-		point["accelerations"] = trajectory.joint_trajectory.points[i].accelerations;
-		point["effort"] = trajectory.joint_trajectory.points[i].effort;
-		// point["time_from_start"] = trajectory.joint_trajectory.points[i].time_from_start.toSec();
-		trajectory_dict["points"].push_back(point);
-	}
-
-	// Write dictionary to .pkl file
-	std::ofstream file("trajectory.pkl", std::ios::binary);
-	// boost::archive::binary_oarchive oa(file);
-	file << trajectory_dict;
-	file.close();
-
-	RCLCPP_INFO(rclcpp::get_logger("save_trajectory"), "Trajectory written to trajectory.pkl"); 
-
-}
-
-
-bool MoveitInterface::createWaypointTrajectory(std::vector<geometry_msgs::msg::Pose>& waypointVector)
-{
-	std::vector<geometry_msgs::msg::Pose> waypoints;
-	rclcpp::Time time_now = this->get_clock()->now();
-	rclcpp::Duration timeout = rclcpp::Duration::from_seconds(0.5);
-
-	auto current_pose = m_movegroupInterface->getCurrentPose();
-
-	waypoints.push_back(current_pose.pose);
-
-	//REMOVE
-	for(auto waypoint : waypointVector)
-	{
-	// 	geometry_msgs::msg::Pose output_wp_world;
-		// getTf(waypoint,output_wp_world,"world","base");
-		// geometry_msgs::msg::TransformStamped tfstamped = m_tfBuffer.lookupTransform("world","base", this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
-		// tf2::doTransform(waypoint, output_wp_world, tfstamped);
-
-		// waypoints.push_back(output_wp_world);
-		waypoints.push_back(waypoint);
-	}
-	// waypoints.push_back(current_pose.pose);
-
-	std::cout << "Waypoints:" << std::endl;
-	for (size_t i = 0; i < waypoints.size(); ++i) {
-		const geometry_msgs::msg::Pose& pose = waypoints[i];
-		std::cout << "  - Position: (" << pose.position.x << ", "
-			<< pose.position.y << ", " << pose.position.z << ")" << std::endl;
-
-		std::cout << "    - Orientation (quaternion):" << std::endl;
-		std::cout << "      - w: " << pose.orientation.w << std::endl;
-		std::cout << "      - x: " << pose.orientation.x << std::endl;
-		std::cout << "      - y: " << pose.orientation.y << std::endl;
-		std::cout << "      - z: " << pose.orientation.z << std::endl;
-	}
-
-	// doTask(waypointVector);
-	RCLCPP_INFO(this->get_logger(),"TASK");
-	// double fraction = 0.0;
-	// RCLCPP_INFO(this->get_logger(),"BEFORE!!!! Cartesian frajectory fraction value: %f", fraction);
-
-	// while(fraction <= 0.75)
-	// {
-	//   fraction = m_movegroupInterface->computeCartesianPath(waypoints, 0.001, 0.0, m_robotTrajectory);
-	//   RCLCPP_INFO(this->get_logger(),"Cartesian frajectory fraction value: %f", fraction);
-	// }
-
-	// printRobotTrajectory(m_robotTrajectory);
-	// // Call write to pickle function
-	// writeTrajectoryToPickle(m_robotTrajectory);
-
-	// if(fraction > 0.0)
-	return true;
-
-}
 
 
 bool MoveitInterface::createWaypointTrajectory(std::string& current_task, std::map<std::string, geometry_msgs::msg::Pose>& waypointVector)
 {
-	std::cout << "createWaypointTrajectory" << std::endl;
-	std::vector<geometry_msgs::msg::Pose> waypoints;
-	rclcpp::Time time_now = this->get_clock()->now();
-	rclcpp::Duration timeout = rclcpp::Duration::from_seconds(0.5);
-
-	// auto current_pose = m_movegroupInterface->getCurrentPose();
-	// waypointVector["current_pose"] = current_pose.pose;
-
-	RCLCPP_INFO(this->get_logger(),"TASK");
-	bool taskStatus = false;
-	taskStatus = doTask(current_task, waypointVector);
-	return taskStatus;
+	RCLCPP_INFO(this->get_logger(), "createWaypointTrajectory: %s", current_task.c_str());
+	return doTask(current_task, waypointVector);
 }
 
-void MoveitInterface::planTrajectory(bool &validTrajectory)
-{
-	if (validTrajectory)
-	{
-		// Retime the trajectory to apply velocity/acceleration scaling
-		robot_trajectory::RobotTrajectory rt(
-				m_movegroupInterface->getRobotModel(), m_movegroupInterface->getName());
-
-		rt.setRobotTrajectoryMsg(*m_movegroupInterface->getCurrentState(), m_robotTrajectory);
-
-		trajectory_processing::IterativeParabolicTimeParameterization iptp;
-		bool success = iptp.computeTimeStamps(
-				rt, m_maxVel, m_maxAcc); //rt, vel_scaling, acc_scaling
-
-		if (!success)
-		{
-			RCLCPP_ERROR(this->get_logger(), "Time parameterization failed!");
-		}
-
-		// Convert back to message
-		moveit_msgs::msg::RobotTrajectory retimed_trajectory;
-		rt.getRobotTrajectoryMsg(retimed_trajectory);
-
-		// Create plan
-		moveit::planning_interface::MoveGroupInterface::Plan plan;
-		plan.trajectory_ = retimed_trajectory;
-
-		// Print Final Joint Positions
-		const auto& final_joint_values = plan.trajectory_.joint_trajectory.points.back().positions;
-		RCLCPP_INFO(this->get_logger(), "Final Joint Positions:");
-		for (size_t i = 0; i < final_joint_values.size(); ++i) {
-			RCLCPP_INFO(this->get_logger(), "Joint %zu: %f", i + 1, final_joint_values[i]);
-		}
-
-		// Execute
-		if(m_config["execute"].as<bool>())
-		{
-			RCLCPP_ERROR(this->get_logger(), "Executing!!!!");
-			m_movegroupInterface->execute(plan);
-		}
-	}
-	else
-	{
-		RCLCPP_ERROR(this->get_logger(), "Cartesian planning failed!");
-	}
-	m_completed = false;
-}
 
 void MoveitInterface::setParams()
 {
 	auto mg = m_config["move_group"];
 	if (!mg) {
-		std::cerr << "Move group config missing in YAML!" << std::endl;
+		RCLCPP_ERROR(this->get_logger(), "Move group config missing in YAML!");
 		return;
 	}
 	std::string planner_id = m_config["move_group"]["planner_id"].as<std::string>();
@@ -329,14 +160,8 @@ void MoveitInterface::setParams()
 	std::string ee_link = m_config["move_group"]["end_effector_link"].as<std::string>();
 	std::string pose_ref = m_config["move_group"]["pose_reference_frame"].as<std::string>();
 
-	std::cout << "Loaded Move Group Config:" << std::endl;
-	std::cout << "Planner ID: " << planner_id << std::endl;
-	std::cout << "Planning Time: " << planning_time << std::endl;
-	std::cout << "Num Planning Attempts: " << num_attempts << std::endl;
-	std::cout << "Max Velocity Scaling Factor: " << m_maxVel << std::endl;
-	std::cout << "Max Acceleration Scaling Factor: " << m_maxAcc << std::endl;
-	std::cout << "End Effector Link: " << ee_link << std::endl;
-	std::cout << "Pose Reference Frame: " << pose_ref << std::endl;
+	RCLCPP_INFO(this->get_logger(), "Loaded Move Group Config: planner=%s time=%.1f attempts=%d vel=%.2f acc=%.2f ee=%s ref=%s",
+		planner_id.c_str(), planning_time, num_attempts, m_maxVel, m_maxAcc, ee_link.c_str(), pose_ref.c_str());
 
 	if (!m_movegroupInterface) {
 		RCLCPP_ERROR(this->get_logger(), "MoveGroupInterface is not initialized!");
@@ -374,7 +199,6 @@ void MoveitInterface::isTransformAvailable(geometry_msgs::msg::Pose& input_pose,
 
 void MoveitInterface::gripperService(bool& state)
 {
-	// m_waiting_for_gripper_response = false;
   if (m_waiting_for_gripper_response) {
     RCLCPP_WARN(this->get_logger(), "Gripper Service call in progress, skipping new request");
     return;
@@ -406,7 +230,6 @@ void MoveitInterface::gripperService(bool& state)
       auto response = future.get();
       if (response->response == "Done") {
         RCLCPP_INFO(this->get_logger(), "Service succeeded: %s", response->response.c_str());
-		// m_waiting_for_gripper_response = true;
       } else {
         RCLCPP_ERROR(this->get_logger(), "Service failed: %s", response->response.c_str());
       }
@@ -466,7 +289,6 @@ void MoveitInterface::getTf(geometry_msgs::msg::Pose& input_pose,geometry_msgs::
 	isTransformAvailable(input_pose, output_pose, tfstamped, target_frame, source_frame,0.5);
 	if (m_tfFound)
 	{
-		// RCLCPP_INFO(this->get_logger(), "Path Transform verified.");
 		m_tfFound = false;
 	}
 	else
@@ -505,9 +327,8 @@ void MoveitInterface::loadCSVToPoses(const std::string& filename, std::vector<ge
 			test_pose.orientation.w = 1.0;
 
 			dummyPath.push_back(test_pose);
-			// std::cout << "pose converted !" << std::endl;
 		} else {
-			std::cerr << "Skipping malformed line: " << line << std::endl;
+			RCLCPP_WARN(this->get_logger(), "Skipping malformed line: %s", line.c_str());
 		}
 	}
 }
@@ -597,9 +418,9 @@ bool MoveitInterface::generateStaticTFPose()
 		m_transformedPoses[source_frame] = m_screenLeft;
 
 		source_frame = "sq_right";
-		m_screenRIght = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenRIght.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenRIght;
+		m_screenRight = lookupPoseTransformStamped(target_frame, source_frame);
+		m_screenRight.orientation = m_screenAlignPose.orientation;
+		m_transformedPoses[source_frame] = m_screenRight;
 
 		loadCSVToPoses("/home/atu-2/robothon/src/moveit_interface/config/maze_path.csv",m_mazePath);
 
@@ -622,14 +443,10 @@ void MoveitInterface::reset()
 	m_detectionPoses.resize(0);
 	m_callShapeService = false;
 	m_callTextService = false;
-	// m_service_map["localize_board"].srv_response.success = false;
-
 }
 
 void MoveitInterface::run()
 {
-	// m_movegroupInterface = std::make_shared<moveit::planning_interface::MoveGroupInterface>(this->shared_from_this(), "ur_manipulator");
-	// m_state = InterfaceState::IDLE;
 	if(m_config["custom_task"].as<bool>())
 	{
 		m_nextTaskType =  TaskType::BYOD;
@@ -657,7 +474,6 @@ void MoveitInterface::run()
 						}
 						else
 							m_state = InterfaceState::WAIT_FOR_RESPONSE;
-						//std::cout << "m_waiting_for_response " << m_waiting_for_response << std::endl;
 						break;
 					}
 				case InterfaceState::WAIT_FOR_RESPONSE:
@@ -694,7 +510,6 @@ void MoveitInterface::run()
 				case InterfaceState::EXECUTE:
 					{
 						RCLCPP_WARN(this->get_logger(), "State: EXECUTE -> DONE");
-						// RCLCPP_WARN(this->get_logger(), "Proceeding to final task (e.g., planning)...");
 						m_waiting_for_response = false; //To ensure all states are called freshly
 						executeTasks(m_nextTaskType);
 						break;
@@ -829,9 +644,7 @@ bool MoveitInterface::executeMaze()
 		tfstamped.transform.rotation.z = m_transformedPoses[source_frame].orientation.z;
 		tfstamped.transform.rotation.w = m_transformedPoses[source_frame].orientation.w;
 
-		// 
-		//  = m_tfBuffer.lookupTransform(target_frame, source_frame, this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
-		std::cout << "m_mazePath " << m_mazePath.size() << std::endl;
+		RCLCPP_INFO(this->get_logger(), "m_mazePath size: %zu", m_mazePath.size());
 
 		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
 		named_poses["screen_align_pose"] = m_transformedPoses["align_frame"];
@@ -839,7 +652,6 @@ bool MoveitInterface::executeMaze()
 		for(auto pose : m_mazePath)
 		{
 			geometry_msgs::msg::Pose transformed_maze_pose;
-			// getTf(pose,transformed_maze_pose,tfstamped,target_frame,source_frame);
 			tf2::doTransform(pose, transformed_maze_pose, tfstamped);
 			transformed_maze_pose.orientation = m_transformedPoses["align_frame"].orientation;
 			std::string name = "maze_pathpoint_" + std::to_string(index);
@@ -864,9 +676,9 @@ bool MoveitInterface::executeMaze()
 	}
 	catch(const std::exception& e)
 	{
-		std::cerr << e.what() << '\n';
+		RCLCPP_ERROR(this->get_logger(), "%s", e.what());
+		return false;
 	}
-	
 }
 
 
@@ -966,26 +778,10 @@ bool MoveitInterface::executeScreenText()
 	std::string source_frame = "";
 	std::string current_task = "";
 
-	//@NOTE: Uncomment if testing the screen text task independently - go to screen approach first
-	// if(!m_callTextService) 
-	// {
-
-	// 	current_task = "screen_approach";
-	// 	std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-	// 	named_poses["screen_align_pose"] = m_transformedPoses["align_frame"];
-	// 	named_poses["screen"] = m_transformedPoses["screen"];
-
-	// 	bool validTrajectory = false;
-	// 	validTrajectory = createWaypointTrajectory(current_task, named_poses);
-	// 	m_callTextService = validTrajectory;
-	// 	return false;
-	// }
-	// else
 	{
-		if(!m_service_map["detect_text"].srv_response.success)// && m_srvAttempts < 3)
+		if(!m_service_map["detect_text"].srv_response.success)
 		{
 			callTriggerService("detect_text");
-			// m_srvAttempts++;
 			return false;
 		}
 
@@ -1004,18 +800,17 @@ bool MoveitInterface::executeScreenText()
 
 		int repeat_count = 1;
 
-		std::cout << "ID: " << parsedTask.id << " size " <<parsedTask.task_names.size() << "\n";
+		RCLCPP_INFO(this->get_logger(), "ID: %d size %zu", parsedTask.id, parsedTask.task_names.size());
 		for (const auto& name : parsedTask.task_names)
 		{
-			
-			std::cout << "Task from screen : " << name << "\n";
+			RCLCPP_INFO(this->get_logger(), "Task from screen: %s", name.c_str());
 			source_frame = name;
 			geometry_msgs::msg::Pose targetPose;
 			try
 			{
 				targetPose = m_transformedPoses[name];
 				named_poses[name] = targetPose;
-				std::cout << targetPose.position.x << " " << targetPose.position.y << std::endl;
+				RCLCPP_INFO(this->get_logger(), "  pose: %.3f %.3f", targetPose.position.x, targetPose.position.y);
 			}
 			catch (const tf2::TransformException & ex) {
 				RCLCPP_INFO(this->get_logger(), "Could not transform 'base_link' to 'point on screen: %s", ex.what());
@@ -1055,7 +850,7 @@ bool MoveitInterface::executeScreenMotion()
 	std::string source_frame = "";
 	std::string current_task = "";
 
-	std::cout << "m_callShapeService " << m_callShapeService << std::endl;
+	RCLCPP_INFO(this->get_logger(), "m_callShapeService: %d", m_callShapeService);
 	if(!m_callShapeService)
 	{
 		current_task = "screen_approach";
@@ -1072,8 +867,8 @@ bool MoveitInterface::executeScreenMotion()
 	}
 	else
 	{
-		std::cout << "m_labelData " << m_labelData << std::endl;
-		if(!m_service_map["detect_shape"].srv_response.success) // || m_labelData == "None")
+		RCLCPP_INFO(this->get_logger(), "m_labelData: %s", m_labelData.c_str());
+		if(!m_service_map["detect_shape"].srv_response.success)
 		{
 			callTriggerService("detect_shape");
 			return false;
@@ -1082,11 +877,10 @@ bool MoveitInterface::executeScreenMotion()
 		if (m_shapePoses.poses.empty())
 		{
 			RCLCPP_INFO(this->get_logger(),"Waiting for detection");
-			// m_service_map["detect_shape"].srv_response.success = false;
 			return false;
 		}
 			
-		std::cout << "Shape Detected\n";
+		RCLCPP_INFO(this->get_logger(), "Shape Detected");
 		current_task = "screen_draw";
 		target_frame = "base_link";
 		source_frame = m_shapePoses.header.frame_id;
@@ -1102,8 +896,8 @@ bool MoveitInterface::executeScreenMotion()
 			{
 				geometry_msgs::msg::Pose temp;
 				getTf(pose,temp,tfstamped,target_frame,source_frame);
-				std::cout << " pose " << pose.position.x << " " << pose.position.y << std::endl; 
-				std::cout << " temp " << temp.position.x << " " << temp.position.y << std::endl; 
+				RCLCPP_DEBUG(this->get_logger(), " pose %.3f %.3f  temp %.3f %.3f",
+					pose.position.x, pose.position.y, temp.position.x, temp.position.y);
 				temp.position.z = m_transformedPoses["Background"].position.z;
 				std::string name = "screen_draw" + std::to_string(index);
 				named_poses[name] = temp;
@@ -1122,11 +916,8 @@ bool MoveitInterface::executeScreenMotion()
 			}
 			else
 			{
-				// current_task = "home_pose";
-				// bool homepose = createWaypointTrajectory(current_task, named_poses);
 				m_screenTaskCounter = 0;
 				m_callShapeService = false;
-				// m_service_map["detect_shape"].srv_response.success = false;
 
 				m_taskType = TaskType::END;
 				return true;
@@ -1161,7 +952,7 @@ void MoveitInterface::parseTaskCommand(std::string& taskCommand,ParsedTask& pars
 			const std::string& task_name = taskTokens[i];
 		
 			for (int j = 0; j < repeat_count; ++j) {
-				std::cout << "Adding task: " << task_name << " [repeat " << (j + 1) << "]\n";
+				RCLCPP_INFO(this->get_logger(), "Adding task: %s [repeat %d]", task_name.c_str(), j + 1);
 				parsedTask.task_names.push_back(task_name); 	
 			}
 	}
@@ -1171,7 +962,7 @@ void MoveitInterface::parseTaskCommand(std::string& taskCommand,ParsedTask& pars
 
 bool MoveitInterface::executeSpeedPress()
 {
-	std::cout << "executeSpeedPress" << std::endl;
+	RCLCPP_INFO(this->get_logger(), "executeSpeedPress");
 
 	std::string target_frame = "";
 	std::string source_frame = "";
@@ -1198,7 +989,6 @@ bool MoveitInterface::executeButtonPress()
 		if(m_buttonStatus != "None")
 		{
 			std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-			// std::cout << "Button Detected\n";
 			if(m_buttonStatus == "Red")
 			{
 				current_task = "press_red_button";
@@ -1220,7 +1010,6 @@ bool MoveitInterface::executeButtonPress()
 		}
 		else
 		{
-			// std::cout << "Waiting for detection "  << m_buttonStatus << "\n";
 			return false;
 		}
 	}
@@ -1238,7 +1027,7 @@ bool MoveitInterface::executeCustomTask()
 	std::string current_task = "";
 
 	{
-		std::cout << " stat " << m_service_map["color_sort"].srv_response.success << std::endl;
+		RCLCPP_INFO(this->get_logger(), "color_sort service response: %d", m_service_map["color_sort"].srv_response.success);
 		if(!m_service_map["color_sort"].srv_response.success)
 		{
 			callTriggerService("color_sort");
@@ -1248,7 +1037,6 @@ bool MoveitInterface::executeCustomTask()
 		if (m_detectionPoses.empty())
 		{
 			RCLCPP_INFO(this->get_logger(),"Waiting for detection");
-			// m_service_map["color_sort"].srv_response.success = false;
 			return false;
 		}
 			
@@ -1271,7 +1059,6 @@ bool MoveitInterface::executeCustomTask()
 			geometry_msgs::msg::TransformStamped tfstamped_gripper = m_tfBuffer.lookupTransform(target_frame, "ee_touch", this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
 
 			std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-			// int index = 0; //Lexographical comparison to be handled further
 			for(auto detection_array : m_detectionPoses)
 			{
 				std::string name = detection_array.header.frame_id + "_object";
@@ -1282,7 +1069,6 @@ bool MoveitInterface::executeCustomTask()
 					objPose.orientation = tfstamped_gripper.transform.rotation;
 					sortingPoses[name].push_back(objPose);
 				}
-				// index++;
 			}
 
 			RCLCPP_INFO(this->get_logger(), "%d ",sortingPoses.size());
@@ -1332,7 +1118,6 @@ void MoveitInterface::setupPlanningScene()
 	pose2.orientation.w = 1.0;
 	object2.pose = pose2;
 
-	// moveit::planning_interface::PlanningSceneInterface psi2;
 	scene_.applyCollisionObject(object2);
 
 }
@@ -1359,11 +1144,13 @@ bool MoveitInterface::doTask(std::string& current_task, std::map<std::string, ge
 	}
 	task_.introspection().publishSolution(*task_.solutions().front());
 
-	auto result = task_.execute(*task_.solutions().front());
-	if (result.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
-	{
-		RCLCPP_ERROR_STREAM(this->get_logger(), "Task execution failed");
-		return false;
+	if (m_config["execute"].as<bool>(true)) {
+		auto result = task_.execute(*task_.solutions().front());
+		if (result.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
+		{
+			RCLCPP_ERROR_STREAM(this->get_logger(), "Task execution failed");
+			return false;
+		}
 	}
 
 	return true;
@@ -1415,17 +1202,22 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 			stage->setGroup(group_name);
 			stage->setIKFrame(hand_frame);
 
-			std::cout << target_name << std::endl;
+			RCLCPP_INFO(this->get_logger(), "move_to target: %s", target_name.c_str());
 			if(target_name != "home_camera_vertical" && target_name != "home_camera" && target_name != "home_camera_touch" && target_name != "home_camera_magnet" && target_name != "stylus_calibration")
 			{
 				auto pose = named_poses.at(target_name);
-				auto offset_vals = stage_node["offset"];
+				double off_x = 0.0, off_y = 0.0, off_z = 0.0;
+				if (stage_node["offset"]) {
+					off_x = stage_node["offset"][0].as<double>();
+					off_y = stage_node["offset"][1].as<double>();
+					off_z = stage_node["offset"][2].as<double>();
+				}
 				geometry_msgs::msg::PoseStamped offset_pose;
 				offset_pose.header.frame_id = "base_link";
 				offset_pose.pose = pose;
-				offset_pose.pose.position.x = offset_pose.pose.position.x + offset_vals[0].as<double>();
-				offset_pose.pose.position.y = offset_pose.pose.position.y + offset_vals[1].as<double>();
-				offset_pose.pose.position.z = offset_pose.pose.position.z + offset_vals[2].as<double>();
+				offset_pose.pose.position.x += off_x;
+				offset_pose.pose.position.y += off_y;
+				offset_pose.pose.position.z += off_z;
 				stage->setGoal(offset_pose);
 			}
 			else if(target_name == "home_camera") //Requires string parse from srdf
@@ -1453,12 +1245,11 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 		}
 		else if (type == "move_relative")
 		{
-			// std::cout << "min max " << min_distance << " "  << max_distance << std::endl;
 			auto dir_vals = stage_node["direction"];
 			std::string frame_id = "world";
 			if(stage_node["frame"])
 			{
-				std::cout << "Frame defined " << stage_node["frame"] << std::endl;
+				RCLCPP_INFO(this->get_logger(), "Frame defined: %s", stage_node["frame"].as<std::string>().c_str());
 				frame_id = stage_node["frame"].as<std::string>();
 			}
 			geometry_msgs::msg::Vector3 dir;
@@ -1501,10 +1292,8 @@ void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_
 
 				auto pose = named_poses.at(path_point_name);
 				auto offset_vals = stage_node["offset"];
-				// geometry_msgs::msg::PoseStamped offset_pose;
 				geometry_msgs::msg::PointStamped offset_pose;
 				offset_pose.header.frame_id = "base_link";
-				// offset_pose.pose = pose;
 				offset_pose.point.x = pose.position.x + offset_vals[0].as<double>();
 				offset_pose.point.y = pose.position.y + offset_vals[1].as<double>();
 				offset_pose.point.z = pose.position.z + offset_vals[2].as<double>();
@@ -1528,16 +1317,14 @@ mtc::Task MoveitInterface::createTask(std::string& current_task, std::map<std::s
 	if(m_config["tasks"][current_task]["hand_frame"])
 	{
 		hand_frame_config = m_config["tasks"][current_task]["hand_frame"].as<std::string>();
-		std::cout << "hand_frame_config " << hand_frame_config.c_str() << std::endl;
+		RCLCPP_INFO(this->get_logger(), "hand_frame_config: %s", hand_frame_config.c_str());
 	}
 
 	const auto& arm_group_name = "ur_manipulator";
-	// const auto& hand_group_name = "hand";
 	const auto& hand_frame = hand_frame_config;
 
 	// Set task properties
 	task.setProperty("group", arm_group_name);
-	// task.setProperty("eef", hand_group_name);
 	task.setProperty("ik_frame", hand_frame);
 
 	

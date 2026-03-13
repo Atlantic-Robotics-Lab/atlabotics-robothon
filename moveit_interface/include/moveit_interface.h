@@ -17,13 +17,10 @@
 #include "trajectory_msgs/msg/joint_trajectory_point.hpp"
 #include <geometry_msgs/msg/pose_array.hpp>
 
-// #include <moveit/robot_trajectory/robot_trajectory.h>
-#include <moveit/trajectory_processing/iterative_time_parameterization.h>
 #include <map>
 //write to file
 #include <fstream>
 #include <yaml-cpp/yaml.h>
-#include <boost/archive/binary_oarchive.hpp>
 #include <yaml-cpp/yaml.h>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <filesystem>  // C++17
@@ -71,11 +68,7 @@ class MoveitInterface: public rclcpp::Node
     public:
         explicit MoveitInterface(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
         ~MoveitInterface();
-        void printRobotTrajectory(const moveit_msgs::msg::RobotTrajectory &trajectory);
-        void writeTrajectoryToPickle(const moveit_msgs::msg::RobotTrajectory &trajectory);
         bool createWaypointTrajectory(std::string&, std::map<std::string, geometry_msgs::msg::Pose>&);
-        bool createWaypointTrajectory(std::vector<geometry_msgs::msg::Pose>&);
-        void planTrajectory(bool &validTrajectory);
         void run();
         void frame_status_callback(const std_msgs::msg::Bool::SharedPtr msg);
         void button_status_callback(const std_msgs::msg::String::SharedPtr msg);
@@ -148,7 +141,6 @@ class MoveitInterface: public rclcpp::Node
     private:
         void setParams();
         std::vector<geometry_msgs::msg::Pose> m_poseArray;
-        moveit_msgs::msg::RobotTrajectory m_robotTrajectory;
         YAML::Node m_config;
         double m_maxVel = 0.0;
         double m_maxAcc = 0.0;
@@ -180,7 +172,7 @@ class MoveitInterface: public rclcpp::Node
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr m_labelSub,m_buttonSub, m_textSub;
         rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr m_pointsSub;
         geometry_msgs::msg::Pose m_redButtonPose, m_blueButtonPose, m_stylusPose, m_mazePose, m_screenPose, m_screenAlignPose;
-        geometry_msgs::msg::Pose m_screenA, m_screenB, m_screenBackground, m_screenUp, m_screenDown, m_screenLeft, m_screenRIght;
+        geometry_msgs::msg::Pose m_screenA, m_screenB, m_screenBackground, m_screenUp, m_screenDown, m_screenLeft, m_screenRight;
         geometry_msgs::msg::Pose m_preRedButtonPose, m_preBlueButtonPose, m_preStylusPose, m_preMazePose, m_preScreenPose;
         std::map<std::string, geometry_msgs::msg::Pose> m_transformedPoses; 
         std::vector<geometry_msgs::msg::Pose> m_mazePath;
