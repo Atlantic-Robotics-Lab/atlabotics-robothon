@@ -1,38 +1,92 @@
+# ─── Robot Configuration (Phase 3.7) ─────────────────────────────────────────
+# Central place for all robot-level settings.
+robot:
+  arm_group: "ur_manipulator"
+
+  # End-effector registry. Tasks reference these by name via end_effector: field.
+  end_effectors:
+    gripper:
+      frame_id: "ee_gripper"
+    touch_stylus:
+      frame_id: "ee_touch"
+    magnet:
+      frame_id: "ee_magnet"
+
+  # Planner defaults. Per-stage vel_acc overrides these.
+  planners:
+    cartesian:
+      step_size: 0.01
+      default_vel_acc: [0.2, 0.2]
+    interpolation:
+      default_vel_acc: [0.2, 0.2]
+    sampling:
+      default_vel_acc: [0.2, 0.2]
+
+  # Gripper profiles used by GripperController (Phase 3.7)
+  gripper:
+    open:  { position: 255, speed: 255, force: 128 }
+    close: { position: 0,   speed: 64,  force: 1   }
+
+# ─── MoveGroup Params (kept for setParams() compatibility) ────────────────────
 move_group:
   planner_id: "TRRT"
   planning_time: 10.0
-  num_planning_attempts: 10 
+  num_planning_attempts: 10
   max_velocity_scaling_factor: 0.10
   max_acceleration_scaling_factor: 0.10
   end_effector_link: "tool0"
   pose_reference_frame: "base_link"
 
-gripper:
-  open:
-    position: 255
-    speed: 255
-    force: 128
-  close:
-    position: 0
-    speed: 64
-    force: 1
-
-
+# ─── Execution Flags ──────────────────────────────────────────────────────────
 execute: false
-planning : true
+planning: true
 custom_task: false
 
+# ─── Task Sequence (Phase 3.6) ────────────────────────────────────────────────
+# Defines the Robothon execution order. Each type maps to an execute* method in
+# TaskOrchestrator. Add a params: block to pass template variables (Phase 4.1)
+# into task stage fields that use {{variable}} placeholders.
+#
+# Example with params:
+#   - type: press_buttons
+#     params:
+#       button_frame: "red_button"   # resolves {{button_frame}} in stage targets
+task_sequence:
+  - type: speed_press
+  - type: press_buttons
+  - type: grab_stylus_touch
+  - type: grab_stylus_magnet
+  - type: screen_shape
+  - type: screen_text
+  - type: maze
+  - type: drop_stylus
+
+# ─── Task Templates ───────────────────────────────────────────────────────────
+# Each task is an MTC motion segment executed by TaskConfigInterpreter.
+#
+# Stage field reference:
+#   type:         move_to | move_relative | move_to_path
+#   target_type:  named_pose (SRDF joint state) | tf_frame (runtime pose lookup)
+#   end_effector: references robot.end_effectors.<name>.frame_id
+#   frame:        reference frame for move_relative direction (Phase 3.5, explicit)
+#   vel_acc:      [velocity_scale, acceleration_scale] overrides planner defaults
+#   offset:       [x, y, z] added to pose for move_to tf_frame targets
+#   minmax_dist:  [min, max] distance for move_relative
+#   target:       may contain {{variable}} placeholders resolved from task_sequence params
 tasks:
   speed_test:
+    end_effector: gripper
     stages:
       - name: move_home_cam
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera_vertical
         vel_acc: [1.0, 1.0]
 
       - name: move_blue_pre_button
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: blue_button
         offset: [0.0, 0.0, 0.1]
@@ -40,18 +94,20 @@ tasks:
       - name: press_blue
         type: move_relative
         planner: cartesian
-        target: blue_button
+        frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.105, 0.105]
 
       - name: retract_blue
         type: move_relative
         planner: cartesian
-        target: blue_button
+        frame: world
         direction: [0.0, 0.0, 1.0]
-      
+        minmax_dist: [0.1, 0.1]
+
       - name: blue_to_pre_red
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: red_button
         offset: [0.0, 0.0, 0.1]
@@ -59,31 +115,36 @@ tasks:
       - name: press_red
         type: move_relative
         planner: cartesian
-        target: red_button
+        frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.105, 0.105]
 
       - name: retract_red
         type: move_relative
         planner: cartesian
-        target: red_button
+        frame: world
         direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.1, 0.1]
 
       - name: move_home
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera
 
   press_blue_button:
+    end_effector: gripper
     stages:
       - name: move_home_cam
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera_vertical
         vel_acc: [1.0, 1.0]
 
       - name: move_blue_pre_button
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: blue_button
         offset: [0.0, 0.0, 0.1]
@@ -91,32 +152,36 @@ tasks:
       - name: press_blue
         type: move_relative
         planner: cartesian
-        target: blue_button
+        frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.105, 0.105]
 
       - name: retract_blue
         type: move_relative
         planner: cartesian
-        target: blue_button
+        frame: world
         direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.1, 0.1]
 
       - name: move_home
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera
 
-
   press_red_button:
+    end_effector: gripper
     stages:
       - name: move_home_cam
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera_vertical
         vel_acc: [1.0, 1.0]
 
       - name: move_red_pre_button
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: red_button
         offset: [0.0, 0.0, 0.1]
@@ -124,31 +189,36 @@ tasks:
       - name: press_red
         type: move_relative
         planner: cartesian
-        target: red_button
+        frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.105, 0.105]
 
       - name: retract_red
         type: move_relative
         planner: cartesian
-        target: red_button
+        frame: world
         direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.1, 0.1]
 
       - name: move_home
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera
 
   pick_stylus:
+    end_effector: gripper
     stages:
       - name: move_home_cam
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera_vertical
         vel_acc: [0.8, 0.8]
 
       - name: approach_stylus
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: stylus_pose
         offset: [0.0, 0.0, 0.1]
@@ -157,36 +227,41 @@ tasks:
       - name: align_stylus
         type: move_relative
         planner: cartesian
+        frame: ee_gripper
         direction: [-1.0, 0.0, 0.0]
         minmax_dist: [0.003, 0.003]
-        frame: ee_gripper
         vel_acc: [0.1, 0.1]
 
       - name: grab_stylus
         type: move_relative
         planner: cartesian
+        frame: world
         direction: [0.0, 0.0, -1]
         minmax_dist: [0.103, 0.103]
-        
 
   retract_stylus:
+    end_effector: gripper
     stages:
       - name: stylus_retract
         type: move_relative
         planner: cartesian
+        frame: world
         direction: [0.0, 0.0, 0.1]
+        minmax_dist: [0.1, 0.1]
 
       - name: rotate_touch
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera_touch
         vel_acc: [0.8, 0.8]
 
   screen_approach:
-    hand_frame: ee_touch
+    end_effector: touch_stylus
     stages:
       - name: screen_align
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: screen_align_pose
         offset: [0.0, 0.0, 0.0]
@@ -194,15 +269,17 @@ tasks:
 
       - name: screen_approach
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: screen
         offset: [0.054, -0.033, 0.04]
 
   screen_draw:
-    hand_frame: ee_touch
+    end_effector: touch_stylus
     stages:
       - name: align_background
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: background
         offset: [0.0, 0.0, 0.03]
@@ -216,13 +293,14 @@ tasks:
 
       - name: retract_screen
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: screen
         offset: [0.054, -0.033, 0.04]
         vel_acc: [0.1, 0.1]
 
   screen_text:
-    hand_frame: ee_touch
+    end_effector: touch_stylus
     stages:
       - name: screen_text_poses
         type: move_to_path
@@ -233,69 +311,76 @@ tasks:
 
       - name: retract_screen
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: screen
         offset: [0.054, -0.033, 0.02]
         vel_acc: [0.1, 0.1]
 
   retract_align_screen:
+    end_effector: gripper
     stages:
       - name: align_screen
         type: move_relative
         planner: cartesian
+        frame: world
         direction: [0.0, 0.0, 1.0]
         minmax_dist: [0.1, 0.1]
         vel_acc: [0.5, 0.5]
 
       - name: move_home_magnet
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera_magnet
         vel_acc: [0.8, 0.8]
 
-
   place_stylus:
-    hand_frame: ee_gripper
+    end_effector: gripper
     stages:
       - name: move_home
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera_vertical
         vel_acc: [0.8, 0.8]
 
       - name: approach_stylus
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: stylus_pose
         offset: [0.0, 0.0, 0.1]
-      
+
       - name: align_stylus_centre
         type: move_relative
         planner: cartesian
+        frame: ee_gripper
         direction: [0.0, 1.0, 0.0]
         minmax_dist: [0.007, 0.007]
-        frame: ee_gripper
         vel_acc: [0.2, 0.2]
 
       - name: align_stylus
         type: move_relative
         planner: cartesian
+        frame: ee_gripper
         direction: [-1.0, 0.0, 0.0]
         minmax_dist: [0.01, 0.01]
-        frame: ee_gripper
         vel_acc: [0.2, 0.2]
 
       - name: release_stylus
         type: move_relative
         planner: cartesian
+        frame: world
         direction: [0.0, 0.0, -1]
         minmax_dist: [0.095, 0.095]
 
   solve_maze:
-    hand_frame: ee_magnet
+    end_effector: magnet
     stages:
       - name: screen_align
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: screen_align_pose
         offset: [0.0, 0.0, 0.0]
@@ -307,35 +392,41 @@ tasks:
         target: maze_path_poses
         offset: [0.0, 0.0, 0.02]
         vel_acc: [0.05, 0.05]
-  
+
   retract_maze:
+    end_effector: gripper
     stages:
       - name: maze_up
         type: move_relative
         planner: cartesian
+        frame: world
         direction: [0.0, 0.0, 1.0]
         minmax_dist: [0.1, 0.1]
         vel_acc: [0.8, 0.8]
 
   home_pose:
+    end_effector: gripper
     stages:
       - name: move_home
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera
         vel_acc: [1.0, 1.0]
 
   retract_stylus_invert:
-    hand_frame: ee_touch
+    end_effector: touch_stylus
     stages:
       - name: stylus_calibration
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: stylus_calibration
         vel_acc: [0.2, 0.2]
 
       - name: stylus_calibration_precise
         type: move_to
+        target_type: tf_frame
         planner: interpolation
         target: stylus_calibration_precise
         offset: [0.0, 0.0, 0.1]
@@ -344,18 +435,20 @@ tasks:
       - name: press_stytlus_calib
         type: move_relative
         planner: cartesian
-        target: stylus_calibration_precise
+        frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.10, 0.10]
 
-      - name: stylus_calibration
+      - name: stylus_calibration_return
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: stylus_calibration
         vel_acc: [0.2, 0.2]
 
       - name: move_home_touch
         type: move_to
+        target_type: named_pose
         planner: interpolation
         target: home_camera_touch
         vel_acc: [0.2, 0.2]

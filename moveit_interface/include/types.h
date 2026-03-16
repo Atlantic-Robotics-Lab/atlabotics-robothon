@@ -2,6 +2,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include "std_srvs/srv/trigger.hpp"
+#include <map>
 #include <string>
 #include <vector>
 
@@ -49,4 +50,10 @@ struct ServiceInfo {
 struct ParsedTask {
     int id;
     std::vector<std::string> task_names;
+};
+
+// One entry in task_sequence YAML (Phase 3.6 / 4.1)
+struct TaskSequenceEntry {
+    std::string type;
+    std::map<std::string, std::string> params;
 };

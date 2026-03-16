@@ -18,16 +18,20 @@ TaskOrchestrator::TaskOrchestrator(
 {
 }
 
+// Forwards m_stepParams for template variable resolution (Phase 4.1)
 bool TaskOrchestrator::doTask(std::string& task_name, std::map<std::string, geometry_msgs::msg::Pose>& poses)
 {
-    return m_interpreter->doTask(task_name, poses);
+    return m_interpreter->doTask(task_name, poses, m_stepParams);
 }
 
 void TaskOrchestrator::reset()
 {
     m_screenTaskCounter = 0;
-    m_callShapeService = false;
-    m_callTextService = false;
+    m_callShapeService  = false;
+    m_callTextService   = false;
+    m_sequenceIndex     = 0;
+    m_sequenceLoaded    = false;
+    m_stepParams.clear();
     m_perception->resetState();
 }
 
@@ -36,108 +40,94 @@ bool TaskOrchestrator::generateStaticTFPose()
     return m_perception->generateStaticTFPose();
 }
 
+// ─── loadTaskSequence (Phase 3.6) ─────────────────────────────────────────────
+// Reads task_sequence from YAML and populates m_taskSequence.
+void TaskOrchestrator::loadTaskSequence()
+{
+    m_taskSequence.clear();
+    const auto& seq = m_interpreter->config()["task_sequence"];
+    if (!seq || !seq.IsSequence()) {
+        RCLCPP_WARN(m_node->get_logger(),
+                    "No task_sequence found in config; sequence will be empty");
+        return;
+    }
+    for (const auto& entry : seq) {
+        if (!entry["type"]) continue;
+        TaskSequenceEntry e;
+        e.type = entry["type"].as<std::string>();
+        if (entry["params"] && entry["params"].IsMap()) {
+            for (const auto& kv : entry["params"])
+                e.params[kv.first.as<std::string>()] = kv.second.as<std::string>();
+        }
+        m_taskSequence.push_back(e);
+    }
+    RCLCPP_INFO(m_node->get_logger(), "Loaded %zu task sequence steps", m_taskSequence.size());
+}
+
+// ─── executeStep (Phase 3.6) ──────────────────────────────────────────────────
+// Dispatches a single task_sequence step to the appropriate execute* method.
+// Sets m_stepParams so template vars reach doTask (Phase 4.1).
+bool TaskOrchestrator::executeStep(
+    const std::string& type,
+    const std::map<std::string, std::string>& params,
+    TaskType& task)
+{
+    m_stepParams = params;  // make params available inside execute* → doTask chain
+
+    if (type == "speed_press")    return executeSpeedPress();
+    if (type == "press_buttons")  return executeButtonPress();
+    if (type == "grab_stylus_touch") {
+        task = TaskType::GRAB_STYLUS_TOUCH;
+        return executeGrabStylus(task);
+    }
+    if (type == "grab_stylus_magnet") {
+        task = TaskType::GRAB_STYLUS_MAGNET;
+        return executeGrabStylus(task);
+    }
+    if (type == "screen_shape") return executeScreenMotion();
+    if (type == "screen_text")  return executeScreenText();
+    if (type == "maze")         return executeMaze();
+    if (type == "drop_stylus")  return executeDropStylus();
+
+    RCLCPP_ERROR(m_node->get_logger(), "Unknown task_sequence type: '%s' — skipping",
+                 type.c_str());
+    return true;  // unknown step treated as done to avoid infinite retry
+}
+
+// ─── executeTasks (Phase 3.6) ─────────────────────────────────────────────────
+// Replaces the hardcoded switch-case with a YAML-driven sequence.
 void TaskOrchestrator::executeTasks(TaskType& task, InterfaceState& out_state)
 {
-    switch (task)
-    {
-        case TaskType::NONE:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "No task type Defined, executing default");
-            m_taskType = TaskType::END;
-            out_state = InterfaceState::DONE;
-            break;
-        }
+    // BYOD mode: custom_task:true bypasses the standard sequence
+    if (task == TaskType::BYOD) {
+        bool done = executeCustomTask();
+        if (done) out_state = InterfaceState::DONE;
+        return;
+    }
 
-        case TaskType::SPEED_PRESS:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: SPEED_PRESS");
-            bool state = executeSpeedPress();
-            if (state)
-                task = TaskType::PRESS_BUTTONS;
-            break;
-        }
+    // Load sequence from YAML on first call (or after reset)
+    if (!m_sequenceLoaded) {
+        loadTaskSequence();
+        m_sequenceLoaded = true;
+    }
 
-        case TaskType::PRESS_BUTTONS:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: PRESS_BUTTONS");
-            bool state = executeButtonPress();
-            if (state)
-                task = TaskType::GRAB_STYLUS_TOUCH;
-            break;
-        }
+    // All steps done
+    if (m_sequenceIndex >= static_cast<int>(m_taskSequence.size())) {
+        reset();
+        out_state = InterfaceState::DONE;
+        return;
+    }
 
-        case TaskType::GRAB_STYLUS_TOUCH:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: GRAB_STYLUS_TOUCH");
-            bool state = executeGrabStylus(task);
-            if (state)
-                task = TaskType::GRAB_STYLUS_MAGNET;
-            break;
-        }
-
-        case TaskType::SCREEN_SHAPE:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: SCREEN_SHAPE");
-            bool state = executeScreenMotion();
-            if (state)
-                task = TaskType::SCREEN_TEXT;
-            break;
-        }
-
-        case TaskType::SCREEN_TEXT:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: SCREEN_TEXT");
-            bool state = executeScreenText();
-            if (state)
-                task = TaskType::MAZE;
-            break;
-        }
-
-        case TaskType::GRAB_STYLUS_MAGNET:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: GRAB_STYLUS_MAGNET");
-            bool state = executeGrabStylus(task);
-            if (state)
-                task = TaskType::SCREEN_SHAPE;
-            break;
-        }
-
-        case TaskType::MAZE:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: MAZE");
-            bool state = executeMaze();
-            if (state)
-                task = TaskType::DROP_STYLUS;
-            break;
-        }
-
-        case TaskType::DROP_STYLUS:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: DROP_STYLUS");
-            bool state = executeDropStylus();
-            if (state)
-                task = TaskType::END;
-            break;
-        }
-
-        case TaskType::BYOD:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: BYOD");
-            bool state = executeCustomTask();
-            if (state)
-                task = TaskType::END;
-            break;
-        }
-
-        case TaskType::END:
-        {
-            RCLCPP_ERROR(m_node->get_logger(), "TaskType: END");
-            reset();
-            out_state = InterfaceState::DONE;
-            break;
-        }
+    const TaskSequenceEntry& entry = m_taskSequence[m_sequenceIndex];
+    bool step_done = executeStep(entry.type, entry.params, task);
+    if (step_done) {
+        RCLCPP_INFO(m_node->get_logger(), "Step [%d/%zu] '%s' completed",
+                    m_sequenceIndex + 1, m_taskSequence.size(), entry.type.c_str());
+        m_sequenceIndex++;
     }
 }
+
+// ─── execute* implementations (verbatim from Phase 2) ─────────────────────────
 
 bool TaskOrchestrator::executeMaze()
 {
@@ -226,7 +216,7 @@ bool TaskOrchestrator::executeGrabStylus(TaskType& taskType)
     if (taskType == TaskType::GRAB_STYLUS_TOUCH)
     {
         bool gripper_state = false;
-        m_gripper->gripperService(gripper_state); // Open gripper
+        m_gripper->gripperService(gripper_state); // Close gripper
 
         current_task = "pick_stylus";
 
@@ -438,7 +428,7 @@ bool TaskOrchestrator::executeSpeedPress()
 
     std::map<std::string, geometry_msgs::msg::Pose> named_poses;
     named_poses["blue_button"] = m_perception->m_transformedPoses["blue_button"];
-    named_poses["red_button"] = m_perception->m_transformedPoses["red_button"];
+    named_poses["red_button"]  = m_perception->m_transformedPoses["red_button"];
 
     bool validTrajectory = false;
     validTrajectory = doTask(current_task, named_poses);

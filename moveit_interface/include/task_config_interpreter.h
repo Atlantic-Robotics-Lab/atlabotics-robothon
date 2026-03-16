@@ -24,8 +24,14 @@ class TaskConfigInterpreter
 public:
     explicit TaskConfigInterpreter(rclcpp::Node* node, const YAML::Node& config);
 
-    bool doTask(std::string& current_task, std::map<std::string, geometry_msgs::msg::Pose>& waypoints);
-    mtc::Task createTask(std::string& current_task, std::map<std::string, geometry_msgs::msg::Pose>& waypoints);
+    // params: optional template variables resolved into {{variable}} placeholders (Phase 4.1)
+    bool doTask(std::string& current_task,
+                std::map<std::string, geometry_msgs::msg::Pose>& waypoints,
+                const std::map<std::string, std::string>& params = {});
+
+    mtc::Task createTask(std::string& current_task,
+                         std::map<std::string, geometry_msgs::msg::Pose>& waypoints,
+                         const std::map<std::string, std::string>& params = {});
 
     mtc::Task task_;  // kept public to match original MoveitInterface public member
 
@@ -41,5 +47,10 @@ private:
         const std::map<std::string, geometry_msgs::msg::Pose>& named_poses,
         std::map<std::string, mtc::solvers::PlannerInterfacePtr>& planners,
         const std::string& group_name,
-        const std::string& hand_frame);
+        const std::string& hand_frame,
+        const std::map<std::string, std::string>& params = {});
+
+    // Replaces {{key}} with params[key] in s. Returns s unchanged if no placeholders. (Phase 4.1)
+    static std::string resolveTemplateVar(const std::string& s,
+                                          const std::map<std::string, std::string>& params);
 };

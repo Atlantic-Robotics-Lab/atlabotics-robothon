@@ -5,10 +5,33 @@ TaskConfigInterpreter::TaskConfigInterpreter(rclcpp::Node* node, const YAML::Nod
 {
 }
 
-bool TaskConfigInterpreter::doTask(std::string& current_task, std::map<std::string, geometry_msgs::msg::Pose>& waypoints)
+// ─── Template variable resolution (Phase 4.1) ─────────────────────────────────
+// Replaces all {{key}} placeholders in s with the value from params[key].
+std::string TaskConfigInterpreter::resolveTemplateVar(
+    const std::string& s,
+    const std::map<std::string, std::string>& params)
+{
+    if (params.empty() || s.find("{{") == std::string::npos)
+        return s;
+
+    std::string result = s;
+    for (const auto& [key, val] : params) {
+        const std::string placeholder = "{{" + key + "}}";
+        size_t pos = 0;
+        while ((pos = result.find(placeholder, pos)) != std::string::npos)
+            result.replace(pos, placeholder.size(), val);
+    }
+    return result;
+}
+
+// ─── doTask ───────────────────────────────────────────────────────────────────
+bool TaskConfigInterpreter::doTask(
+    std::string& current_task,
+    std::map<std::string, geometry_msgs::msg::Pose>& waypoints,
+    const std::map<std::string, std::string>& params)
 {
     RCLCPP_INFO(m_node->get_logger(), "Create task");
-    task_ = createTask(current_task, waypoints);
+    task_ = createTask(current_task, waypoints, params);
 
     try
     {
@@ -39,77 +62,121 @@ bool TaskConfigInterpreter::doTask(std::string& current_task, std::map<std::stri
     return true;
 }
 
-mtc::Task TaskConfigInterpreter::createTask(std::string& current_task, std::map<std::string, geometry_msgs::msg::Pose>& waypoints)
+// ─── createTask ───────────────────────────────────────────────────────────────
+mtc::Task TaskConfigInterpreter::createTask(
+    std::string& current_task,
+    std::map<std::string, geometry_msgs::msg::Pose>& waypoints,
+    const std::map<std::string, std::string>& params)
 {
     mtc::Task task;
     task.stages()->setName(current_task);
     task.loadRobotModel(m_node->shared_from_this());
 
-    std::string hand_frame_config = "ee_gripper";
+    // ── Arm group (Phase 3.7: read from robot.arm_group, hardcoded fallback) ──
+    std::string arm_group_name = "ur_manipulator";
+    if (m_config["robot"] && m_config["robot"]["arm_group"])
+        arm_group_name = m_config["robot"]["arm_group"].as<std::string>();
 
-    if (m_config["tasks"][current_task]["hand_frame"])
-    {
-        hand_frame_config = m_config["tasks"][current_task]["hand_frame"].as<std::string>();
-        RCLCPP_INFO(m_node->get_logger(), "hand_frame_config: %s", hand_frame_config.c_str());
+    // ── End-effector / hand frame (Phase 3.3) ────────────────────────────────
+    // Priority: end_effector (new schema) → hand_frame (legacy) → default "ee_gripper"
+    std::string hand_frame_config = "ee_gripper";
+    const YAML::Node& task_node = m_config["tasks"][current_task];
+    if (task_node["end_effector"]) {
+        std::string ee_name = task_node["end_effector"].as<std::string>();
+        if (m_config["robot"]["end_effectors"][ee_name]["frame_id"]) {
+            hand_frame_config = m_config["robot"]["end_effectors"][ee_name]["frame_id"].as<std::string>();
+            RCLCPP_INFO(m_node->get_logger(), "end_effector: %s → frame_id: %s",
+                        ee_name.c_str(), hand_frame_config.c_str());
+        } else {
+            RCLCPP_WARN(m_node->get_logger(),
+                        "end_effector '%s' not found in robot.end_effectors, using default",
+                        ee_name.c_str());
+        }
+    } else if (task_node["hand_frame"]) {
+        hand_frame_config = task_node["hand_frame"].as<std::string>();
+        RCLCPP_INFO(m_node->get_logger(), "hand_frame_config (legacy): %s", hand_frame_config.c_str());
     }
 
-    const auto& arm_group_name = "ur_manipulator";
     const auto& hand_frame = hand_frame_config;
 
-    // Set task properties
     task.setProperty("group", arm_group_name);
     task.setProperty("ik_frame", hand_frame);
 
-    // Disable warnings for this line, as it's a variable that's set but not used in this example
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
-    mtc::Stage* current_state_ptr = nullptr;  // Forward current_state on to grasp pose generator
+    mtc::Stage* current_state_ptr = nullptr;
 #pragma GCC diagnostic pop
 
     auto stage_state_current = std::make_unique<mtc::stages::CurrentState>("current");
     current_state_ptr = stage_state_current.get();
     task.add(std::move(stage_state_current));
 
-    auto sampling_planner = std::make_shared<mtc::solvers::PipelinePlanner>(m_node->shared_from_this());
+    // ── Planner defaults (Phase 3.7: read from robot.planners) ──────────────
+    double cartesian_step = 0.01;
+    double cartesian_vel  = 0.2, cartesian_acc  = 0.2;
+    double interp_vel     = 0.2, interp_acc     = 0.2;
+
+    if (m_config["robot"] && m_config["robot"]["planners"]) {
+        const auto& planners_cfg = m_config["robot"]["planners"];
+        if (planners_cfg["cartesian"]) {
+            const auto& cp = planners_cfg["cartesian"];
+            if (cp["step_size"])         cartesian_step = cp["step_size"].as<double>();
+            if (cp["default_vel_acc"]) {
+                cartesian_vel = cp["default_vel_acc"][0].as<double>();
+                cartesian_acc = cp["default_vel_acc"][1].as<double>();
+            }
+        }
+        if (planners_cfg["interpolation"] && planners_cfg["interpolation"]["default_vel_acc"]) {
+            const auto& ip = planners_cfg["interpolation"]["default_vel_acc"];
+            interp_vel = ip[0].as<double>();
+            interp_acc = ip[1].as<double>();
+        }
+    }
+
+    auto sampling_planner      = std::make_shared<mtc::solvers::PipelinePlanner>(m_node->shared_from_this());
     auto interpolation_planner = std::make_shared<mtc::solvers::JointInterpolationPlanner>();
-    auto cartesian_planner = std::make_shared<mtc::solvers::CartesianPath>();
+    auto cartesian_planner     = std::make_shared<mtc::solvers::CartesianPath>();
+
+    cartesian_planner->setMaxVelocityScalingFactor(cartesian_vel);
+    cartesian_planner->setMaxAccelerationScalingFactor(cartesian_acc);
+    cartesian_planner->setStepSize(cartesian_step);
+
+    interpolation_planner->setMaxVelocityScalingFactor(interp_vel);
+    interpolation_planner->setMaxAccelerationScalingFactor(interp_acc);
 
     std::map<std::string, mtc::solvers::PlannerInterfacePtr> planners;
-    planners["cartesian"] = cartesian_planner;
-    planners["interpolation"] = interpolation_planner;
+    planners["cartesian"]        = cartesian_planner;
+    planners["interpolation"]    = interpolation_planner;
     planners["sampling_planner"] = sampling_planner;
 
-    cartesian_planner->setMaxVelocityScalingFactor(0.2);
-    cartesian_planner->setMaxAccelerationScalingFactor(0.2);
-    cartesian_planner->setStepSize(.01);
-
-    interpolation_planner->setMaxVelocityScalingFactor(0.2);
-    interpolation_planner->setMaxAccelerationScalingFactor(0.2);
-
-    addStagesFromYaml(task, m_config["tasks"][current_task], waypoints, planners, arm_group_name, hand_frame);
+    addStagesFromYaml(task, task_node, waypoints, planners, arm_group_name, hand_frame, params);
     return task;
 }
 
-void TaskConfigInterpreter::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_config, const std::map<std::string, geometry_msgs::msg::Pose>& named_poses, std::map<std::string, mtc::solvers::PlannerInterfacePtr>& planners, const std::string& group_name, const std::string& hand_frame)
+// ─── addStagesFromYaml ────────────────────────────────────────────────────────
+void TaskConfigInterpreter::addStagesFromYaml(
+    mtc::Task& task,
+    const YAML::Node& task_config,
+    const std::map<std::string, geometry_msgs::msg::Pose>& named_poses,
+    std::map<std::string, mtc::solvers::PlannerInterfacePtr>& planners,
+    const std::string& group_name,
+    const std::string& hand_frame,
+    const std::map<std::string, std::string>& params)
 {
     RCLCPP_INFO(m_node->get_logger(), "addStagesFromYaml");
     for (const auto& stage_node : task_config["stages"])
     {
-        std::string type = stage_node["type"].as<std::string>();
-        std::string name = stage_node["name"].as<std::string>();
+        std::string type         = stage_node["type"].as<std::string>();
+        std::string name         = stage_node["name"].as<std::string>();
         std::string planner_name = stage_node["planner"].as<std::string>();
         double min_distance = 0.1;
         double max_distance = 0.1;
 
-        std::string hand_frame_name = "";
+        std::string hand_frame_name = hand_frame;
+        if (stage_node["hand_frame"])
+            hand_frame_name = stage_node["hand_frame"].as<std::string>();
 
-        auto getPlanner = [&](const std::string& name) -> mtc::solvers::PlannerInterfacePtr {
-            return planners.at(name);
-        };
-
-        auto planner = getPlanner(planner_name);
-        if (stage_node["hand_frame"]) { hand_frame_name = stage_node["hand_frame"].as<std::string>(); }
-        else hand_frame_name = hand_frame;
+        auto planner = planners.at(planner_name);
 
         if (stage_node["minmax_dist"])
         {
@@ -125,68 +192,83 @@ void TaskConfigInterpreter::addStagesFromYaml(mtc::Task& task, const YAML::Node&
 
         RCLCPP_INFO(m_node->get_logger(), "TASK TYPE %s", type.c_str());
 
+        // ── move_to ──────────────────────────────────────────────────────────
         if (type == "move_to")
         {
-            std::string target_name = stage_node["target"].as<std::string>();
-            auto stage = std::make_unique<mtc::stages::MoveTo>(name, planner);
+            // Resolve template variables in target name (Phase 4.1)
+            std::string target_name = resolveTemplateVar(
+                stage_node["target"].as<std::string>(), params);
 
+            // ── Determine target_type (Phase 3.1) ────────────────────────────
+            // Explicit target_type in YAML takes priority.
+            // Fallback infers from the hardcoded SRDF named-pose list for backward compat.
+            std::string target_type = "";
+            if (stage_node["target_type"])
+                target_type = stage_node["target_type"].as<std::string>();
+
+            if (target_type.empty()) {
+                target_type = (target_name == "home_camera_vertical" ||
+                               target_name == "home_camera"          ||
+                               target_name == "home_camera_touch"    ||
+                               target_name == "home_camera_magnet"   ||
+                               target_name == "stylus_calibration")
+                              ? "named_pose" : "tf_frame";
+            }
+
+            RCLCPP_INFO(m_node->get_logger(), "move_to target: %s (target_type: %s)",
+                        target_name.c_str(), target_type.c_str());
+
+            auto stage = std::make_unique<mtc::stages::MoveTo>(name, planner);
             stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
             stage->setGroup(group_name);
             stage->setIKFrame(hand_frame);
 
-            RCLCPP_INFO(m_node->get_logger(), "move_to target: %s", target_name.c_str());
-            if (target_name != "home_camera_vertical" && target_name != "home_camera" && target_name != "home_camera_touch" && target_name != "home_camera_magnet" && target_name != "stylus_calibration")
-            {
-                auto pose = named_poses.at(target_name);
-                double off_x = 0.0, off_y = 0.0, off_z = 0.0;
-                if (stage_node["offset"]) {
-                    off_x = stage_node["offset"][0].as<double>();
-                    off_y = stage_node["offset"][1].as<double>();
-                    off_z = stage_node["offset"][2].as<double>();
+            if (target_type == "named_pose") {
+                // SRDF joint state — set goal by name
+                stage->setGoal(target_name);
+                task.add(std::move(stage));
+            } else {
+                // tf_frame — look up pose in named_poses map
+                auto it = named_poses.find(target_name);
+                if (it == named_poses.end()) {
+                    RCLCPP_ERROR(m_node->get_logger(),
+                                 "Pose '%s' not in named_poses, skipping stage '%s'",
+                                 target_name.c_str(), name.c_str());
+                    // stage not added — skips this waypoint gracefully
+                } else {
+                    double off_x = 0.0, off_y = 0.0, off_z = 0.0;
+                    if (stage_node["offset"]) {
+                        off_x = stage_node["offset"][0].as<double>();
+                        off_y = stage_node["offset"][1].as<double>();
+                        off_z = stage_node["offset"][2].as<double>();
+                    }
+                    geometry_msgs::msg::PoseStamped offset_pose;
+                    offset_pose.header.frame_id = "base_link";
+                    offset_pose.pose = it->second;
+                    offset_pose.pose.position.x += off_x;
+                    offset_pose.pose.position.y += off_y;
+                    offset_pose.pose.position.z += off_z;
+                    stage->setGoal(offset_pose);
+                    task.add(std::move(stage));
                 }
-                geometry_msgs::msg::PoseStamped offset_pose;
-                offset_pose.header.frame_id = "base_link";
-                offset_pose.pose = pose;
-                offset_pose.pose.position.x += off_x;
-                offset_pose.pose.position.y += off_y;
-                offset_pose.pose.position.z += off_z;
-                stage->setGoal(offset_pose);
             }
-            else if (target_name == "home_camera") // Requires string parse from srdf
-            {
-                stage->setGoal("home_camera");
-            }
-            else if (target_name == "home_camera_touch")
-            {
-                stage->setGoal("home_camera_touch");
-            }
-            else if (target_name == "home_camera_magnet")
-            {
-                stage->setGoal("home_camera_magnet");
-            }
-            else if (target_name == "stylus_calibration")
-            {
-                stage->setGoal("stylus_calibration");
-            }
-            else
-            {
-                stage->setGoal("home_camera_vertical");
-            }
-            task.add(std::move(stage));
         }
+        // ── move_relative ────────────────────────────────────────────────────
         else if (type == "move_relative")
         {
             auto dir_vals = stage_node["direction"];
+
+            // Phase 3.5: frame is now explicit in YAML; resolve template vars in it
             std::string frame_id = "world";
             if (stage_node["frame"])
-            {
-                RCLCPP_INFO(m_node->get_logger(), "Frame defined: %s", stage_node["frame"].as<std::string>().c_str());
-                frame_id = stage_node["frame"].as<std::string>();
-            }
+                frame_id = resolveTemplateVar(stage_node["frame"].as<std::string>(), params);
+
             geometry_msgs::msg::Vector3 dir;
             dir.x = dir_vals[0].as<double>();
             dir.y = dir_vals[1].as<double>();
             dir.z = dir_vals[2].as<double>();
+
+            RCLCPP_INFO(m_node->get_logger(), "Frame defined: %s", frame_id.c_str());
 
             auto stage = std::make_unique<mtc::stages::MoveRelative>(name, planner);
             stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
@@ -201,21 +283,24 @@ void TaskConfigInterpreter::addStagesFromYaml(mtc::Task& task, const YAML::Node&
 
             task.add(std::move(stage));
         }
+        // ── move_to_path (serial container of sequential waypoints) ──────────
         else
         {
-            RCLCPP_INFO(m_node->get_logger(), "Creating serial ");
+            RCLCPP_INFO(m_node->get_logger(), "Creating serial path container");
             auto path = std::make_unique<mtc::SerialContainer>("follow path");
             task.properties().exposeTo(path->properties(), { "group", "ik_frame" });
             path->properties().configureInitFrom(mtc::Stage::PARENT, { "group", "ik_frame" });
 
-            std::string target_name = stage_node["target"].as<std::string>();
+            std::string target_name = resolveTemplateVar(
+                stage_node["target"].as<std::string>(), params);
             int index = 0;
             for (auto& [path_point_name, path_point] : named_poses)
             {
                 if (path_point_name == "screen" || path_point_name == "screen_align_pose")
                     continue;
                 auto stage = std::make_unique<mtc::stages::MoveTo>(path_point_name, planner);
-                RCLCPP_INFO(m_node->get_logger(), "target %s path_point_name %s", target_name.c_str(), path_point_name.c_str());
+                RCLCPP_INFO(m_node->get_logger(), "target %s path_point_name %s",
+                            target_name.c_str(), path_point_name.c_str());
                 stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
                 stage->setGroup(group_name);
                 stage->setIKFrame(hand_frame);

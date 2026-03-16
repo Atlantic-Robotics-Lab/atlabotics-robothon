@@ -38,9 +38,10 @@ void MoveitInterface::triggerTaskCallback(
     if (!m_config["custom_task"].as<bool>())
     {
         m_state = InterfaceState::IDLE;
+        m_orchestrator->reset();  // reset task sequence index so re-trigger starts from step 1
     }
     response->success = true;
-    response->message = "Task tate trigger set";
+    response->message = "Task state trigger set";
 }
 
 void MoveitInterface::setParams()

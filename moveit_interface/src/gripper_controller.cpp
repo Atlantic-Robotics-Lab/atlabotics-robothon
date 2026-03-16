@@ -17,18 +17,30 @@ void GripperController::gripperService(bool& state)
         return;
     }
 
+    // Phase 3.7: read from robot.gripper (new schema), fall back to top-level gripper:
+    YAML::Node gripper_cfg;
+    if (m_config["robot"] && m_config["robot"]["gripper"])
+        gripper_cfg = m_config["robot"]["gripper"];
+    else if (m_config["gripper"])
+        gripper_cfg = m_config["gripper"];
+    else {
+        RCLCPP_ERROR(m_node->get_logger(),
+                     "No gripper config found (checked robot.gripper and gripper)");
+        return;
+    }
+
     auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
     if (state) // Open
     {
-        request->position = m_config["gripper"]["open"]["position"].as<int>();
-        request->speed    = m_config["gripper"]["open"]["speed"].as<int>();
-        request->force    = m_config["gripper"]["open"]["force"].as<int>();
+        request->position = gripper_cfg["open"]["position"].as<int>();
+        request->speed    = gripper_cfg["open"]["speed"].as<int>();
+        request->force    = gripper_cfg["open"]["force"].as<int>();
     }
     else // Close
     {
-        request->position = m_config["gripper"]["close"]["position"].as<int>();
-        request->speed    = m_config["gripper"]["close"]["speed"].as<int>();
-        request->force    = m_config["gripper"]["close"]["force"].as<int>();
+        request->position = gripper_cfg["close"]["position"].as<int>();
+        request->speed    = gripper_cfg["close"]["speed"].as<int>();
+        request->force    = gripper_cfg["close"]["force"].as<int>();
     }
 
     m_waiting_for_gripper_response = true;
