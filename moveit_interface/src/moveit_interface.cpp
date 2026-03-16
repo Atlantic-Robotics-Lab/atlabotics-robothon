@@ -1,1360 +1,180 @@
-#include <moveit_interface.h>
+#include "moveit_interface.h"
 
-MoveitInterface::MoveitInterface(const rclcpp::NodeOptions & options): Node("moveit_interface",options), m_tfBuffer(this->get_clock()), m_tfListener(std::make_shared<tf2_ros::TransformListener>(m_tfBuffer, this, true))
+MoveitInterface::MoveitInterface(const rclcpp::NodeOptions& options)
+    : Node("moveit_interface", options)
 {
-	RCLCPP_INFO(this->get_logger(), "MoveitInterface node created");
-	std::string pkg_share = ament_index_cpp::get_package_share_directory("moveit_interface");
-	std::filesystem::path config_file = std::filesystem::path(pkg_share) / "config" / "move_group_params.yaml";
-	m_yamlPath = config_file.string();
+    RCLCPP_INFO(this->get_logger(), "MoveitInterface node created");
 
-	m_config = YAML::LoadFile(m_yamlPath);
+    std::string pkg_share = ament_index_cpp::get_package_share_directory("moveit_interface");
+    std::filesystem::path config_file = std::filesystem::path(pkg_share) / "config" / "move_group_params.yaml";
+    m_yamlPath = config_file.string();
+    m_config = YAML::LoadFile(m_yamlPath);
 
-	m_service_map["localize_board"] = {
-		this->create_client<std_srvs::srv::Trigger>("/taskboard/board_localization"),
-		TaskType::LOCALIZE_BOARD,
-		"localize_board",
-	};
-	m_service_map["detect_button"] = {
-		this->create_client<std_srvs::srv::Trigger>("/taskboard/detect_button"),
-		TaskType::PRESS_BUTTONS,
-		"detect_button"
-	};
+    // Construct sub-components after the node base is ready
+    m_gripper     = std::make_unique<GripperController>(this, m_config);
+    m_perception  = std::make_unique<PerceptionBridge>(this, m_config);
+    m_interpreter = std::make_unique<TaskConfigInterpreter>(this, m_config);
+    m_orchestrator = std::make_unique<TaskOrchestrator>(this, m_perception.get(), m_gripper.get(), m_interpreter.get());
 
-	m_service_map["detect_shape"] = {
-		this->create_client<std_srvs::srv::Trigger>("/taskboard/detect_shape"),
-		TaskType::SCREEN_SHAPE,
-		"detect_shape"
-	};
-	m_service_map["detect_text"] = {
-		this->create_client<std_srvs::srv::Trigger>("/trigger_pipeline"),
-		TaskType::SCREEN_TEXT,
-		"detect_text"
-	};
+    m_triggerTask = this->create_service<std_srvs::srv::Trigger>(
+        "trigger_task",
+        std::bind(&MoveitInterface::triggerTaskCallback, this, std::placeholders::_1, std::placeholders::_2));
 
-	m_service_map["color_sort"] = {
-		this->create_client<std_srvs::srv::Trigger>("/color_sort_service"),
-		TaskType::BYOD,
-		"color_sort"
-	};
+    m_state    = InterfaceState::IDLE;
+    m_taskType = TaskType::NONE;
 
-	m_gripperSrv = this->create_client<gripper_srv::srv::GripperService>("/gripper_service");
-
-	m_triggerTask = this->create_service<std_srvs::srv::Trigger>("trigger_task",std::bind(&MoveitInterface::triggerTaskCallback, this, std::placeholders::_1, std::placeholders::_2));
-
-	m_frameSub = this->create_subscription<std_msgs::msg::Bool>("frame_status", 10,
-			std::bind(&MoveitInterface::frame_status_callback, this, std::placeholders::_1)
-			);
-
-	m_buttonSub = this->create_subscription<std_msgs::msg::String>("button_status", 10,
-			std::bind(&MoveitInterface::button_status_callback, this, std::placeholders::_1)
-			);
-
-	m_labelSub = this->create_subscription<std_msgs::msg::String>("detection_label",10,
-			std::bind(&MoveitInterface::labelCallback, this, std::placeholders::_1)
-			);
-
-	m_textSub = this->create_subscription<std_msgs::msg::String>("structured_command",10,
-			std::bind(&MoveitInterface::screenTextCallback, this, std::placeholders::_1)
-			);
-
-	m_pointsSub = this->create_subscription<geometry_msgs::msg::PoseArray>("detection_point",10,
-			std::bind(&MoveitInterface::pointsCallback, this, std::placeholders::_1)
-			);
-
-	m_state = InterfaceState::IDLE;
-	m_taskType = TaskType::NONE;
-
-	setupPlanningScene();
-
+    setupPlanningScene();
 }
 
 MoveitInterface::~MoveitInterface()
 {
-
 }
 
-void MoveitInterface::triggerTaskCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+void MoveitInterface::triggerTaskCallback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
-	m_completed = false;
-	if(!m_config["custom_task"].as<bool>())
-	{
-		m_state = InterfaceState::IDLE;
-	}	
-	response->success = true;
-	response->message = "Task tate trigger set";
+    m_completed = false;
+    if (!m_config["custom_task"].as<bool>())
+    {
+        m_state = InterfaceState::IDLE;
+    }
+    response->success = true;
+    response->message = "Task tate trigger set";
 }
-
-
-void MoveitInterface::labelCallback(const std_msgs::msg::String::SharedPtr msg)
-{
-	RCLCPP_INFO(this->get_logger(), "Detection label: %s", msg->data.c_str());
-	m_labelData = msg->data;
-}
-
-void MoveitInterface::screenTextCallback(const std_msgs::msg::String::SharedPtr msg)
-{
-	RCLCPP_INFO(this->get_logger(), "Text Detection : %s", msg->data.c_str());
-	m_screenCommand = msg->data;
-}
-
-void MoveitInterface::pointsCallback(const geometry_msgs::msg::PoseArray::SharedPtr msg)
-{
-	RCLCPP_INFO(this->get_logger(), "Received %zu detection points.", msg->poses.size());
-	if(msg->poses.empty())
-	{
-		m_shapePoses.poses.clear();
-		m_shapePoses.poses.resize(0);
-	}
-	else
-	{
-		m_shapePoses = *msg;
-		m_detectionPoses.push_back(*msg);
-		for (size_t i = 0; i < msg->poses.size(); ++i) {
-			const auto& pose = msg->poses[i];
-			RCLCPP_INFO(this->get_logger(), "Point[%zu]: [%.2f, %.2f, %.2f]", i, pose.position.x, pose.position.y, pose.position.z);
-		}
-	}
-}
-
-void MoveitInterface::frame_status_callback(const std_msgs::msg::Bool::SharedPtr msg)
-{
-	if (msg->data)
-	{
-		RCLCPP_INFO(this->get_logger(), "Frames are ready (status: TRUE).");
-		m_frameStatus = msg->data;
-	}
-	else
-	{
-		RCLCPP_WARN(this->get_logger(), "Frames not ready (status: FALSE).");
-	}
-
-}
-
-void MoveitInterface::button_status_callback(const std_msgs::msg::String::SharedPtr msg)
-{
-	m_buttonStatus = msg->data.c_str();
-}
-
-
-
-
-bool MoveitInterface::createWaypointTrajectory(std::string& current_task, std::map<std::string, geometry_msgs::msg::Pose>& waypointVector)
-{
-	RCLCPP_INFO(this->get_logger(), "createWaypointTrajectory: %s", current_task.c_str());
-	return doTask(current_task, waypointVector);
-}
-
 
 void MoveitInterface::setParams()
 {
-	auto mg = m_config["move_group"];
-	if (!mg) {
-		RCLCPP_ERROR(this->get_logger(), "Move group config missing in YAML!");
-		return;
-	}
-	std::string planner_id = m_config["move_group"]["planner_id"].as<std::string>();
-	double planning_time = m_config["move_group"]["planning_time"].as<double>();
-	int num_attempts = m_config["move_group"]["num_planning_attempts"].as<int>();
-	m_maxVel = m_config["move_group"]["max_velocity_scaling_factor"].as<double>();
-	m_maxAcc = m_config["move_group"]["max_acceleration_scaling_factor"].as<double>();
-	std::string ee_link = m_config["move_group"]["end_effector_link"].as<std::string>();
-	std::string pose_ref = m_config["move_group"]["pose_reference_frame"].as<std::string>();
-
-	RCLCPP_INFO(this->get_logger(), "Loaded Move Group Config: planner=%s time=%.1f attempts=%d vel=%.2f acc=%.2f ee=%s ref=%s",
-		planner_id.c_str(), planning_time, num_attempts, m_maxVel, m_maxAcc, ee_link.c_str(), pose_ref.c_str());
-
-	if (!m_movegroupInterface) {
-		RCLCPP_ERROR(this->get_logger(), "MoveGroupInterface is not initialized!");
-		return; // or handle appropriately
-	}
-	m_movegroupInterface->setPlannerId(planner_id);
-	m_movegroupInterface->setPlanningTime(planning_time);
-	m_movegroupInterface->setNumPlanningAttempts(num_attempts);
-	m_movegroupInterface->setMaxVelocityScalingFactor(m_maxVel);
-	m_movegroupInterface->setMaxAccelerationScalingFactor(m_maxAcc);
-	m_movegroupInterface->setEndEffectorLink(ee_link);
-	m_movegroupInterface->setPoseReferenceFrame(pose_ref);
-}
-
-
-void MoveitInterface::isTransformAvailable(geometry_msgs::msg::Pose& input_pose, geometry_msgs::msg::Pose& output_pose, geometry_msgs::msg::TransformStamped& tfstamped, const std::string& target_frame, const std::string& source_frame, double timeout_sec)
-{
-	m_tfFound = false;
-	rclcpp::Time time_now = this->get_clock()->now();
-	rclcpp::Duration timeout = rclcpp::Duration::from_seconds(timeout_sec);
-	try 
-	{
-		tfstamped = m_tfBuffer.lookupTransform(target_frame, source_frame, time_now, rclcpp::Duration::from_seconds(0.5));
-		tf2::doTransform(input_pose, output_pose, tfstamped);
-		m_tfFound = true;
-	}
-	catch (const tf2::TransformException& ex)
-	{
-		RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
-		m_tfFound = false;
-	}
-
-}
-
-
-void MoveitInterface::gripperService(bool& state)
-{
-  if (m_waiting_for_gripper_response) {
-    RCLCPP_WARN(this->get_logger(), "Gripper Service call in progress, skipping new request");
-    return;
-  }
-  if (!m_gripperSrv->wait_for_service(std::chrono::seconds(1))) {
-    RCLCPP_WARN(this->get_logger(), "Gripper Service not available yet");
-    return;
-  }
-
-  auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
-	if(state) //Open
-	{
-		request->position = m_config["gripper"]["open"]["position"].as<int>();
-		request->speed 	  = m_config["gripper"]["open"]["speed"].as<int>();
-		request->force 	  = m_config["gripper"]["open"]["force"].as<int>();
-	}
-	else //Close
-	{
-		request->position = m_config["gripper"]["close"]["position"].as<int>();
-		request->speed 	  = m_config["gripper"]["close"]["speed"].as<int>();
-		request->force 	  = m_config["gripper"]["close"]["force"].as<int>();
-	}
-	
-	m_waiting_for_gripper_response = true;
-
-  auto future = m_gripperSrv->async_send_request(
-    request,
-    [this](rclcpp::Client<gripper_srv::srv::GripperService>::SharedFuture future) {
-      auto response = future.get();
-      if (response->response == "Done") {
-        RCLCPP_INFO(this->get_logger(), "Service succeeded: %s", response->response.c_str());
-      } else {
-        RCLCPP_ERROR(this->get_logger(), "Service failed: %s", response->response.c_str());
-      }
-      m_waiting_for_gripper_response = false;
+    auto mg = m_config["move_group"];
+    if (!mg) {
+        RCLCPP_ERROR(this->get_logger(), "Move group config missing in YAML!");
+        return;
     }
-  );
+    std::string planner_id    = m_config["move_group"]["planner_id"].as<std::string>();
+    double planning_time      = m_config["move_group"]["planning_time"].as<double>();
+    int num_attempts          = m_config["move_group"]["num_planning_attempts"].as<int>();
+    m_maxVel = m_config["move_group"]["max_velocity_scaling_factor"].as<double>();
+    m_maxAcc = m_config["move_group"]["max_acceleration_scaling_factor"].as<double>();
+    std::string ee_link       = m_config["move_group"]["end_effector_link"].as<std::string>();
+    std::string pose_ref      = m_config["move_group"]["pose_reference_frame"].as<std::string>();
+
+    RCLCPP_INFO(this->get_logger(),
+        "Loaded Move Group Config: planner=%s time=%.1f attempts=%d vel=%.2f acc=%.2f ee=%s ref=%s",
+        planner_id.c_str(), planning_time, num_attempts, m_maxVel, m_maxAcc, ee_link.c_str(), pose_ref.c_str());
+
+    if (!m_movegroupInterface) {
+        RCLCPP_ERROR(this->get_logger(), "MoveGroupInterface is not initialized!");
+        return;
+    }
+    m_movegroupInterface->setPlannerId(planner_id);
+    m_movegroupInterface->setPlanningTime(planning_time);
+    m_movegroupInterface->setNumPlanningAttempts(num_attempts);
+    m_movegroupInterface->setMaxVelocityScalingFactor(m_maxVel);
+    m_movegroupInterface->setMaxAccelerationScalingFactor(m_maxAcc);
+    m_movegroupInterface->setEndEffectorLink(ee_link);
+    m_movegroupInterface->setPoseReferenceFrame(pose_ref);
 }
 
-
-void MoveitInterface::callTriggerService(const std::string& key)
+void MoveitInterface::setupPlanningScene()
 {
-	if (m_waiting_for_response) {
-		RCLCPP_WARN(this->get_logger(), "[%s] Waiting for previous service response.", key.c_str());
-		return;
-	}
+    moveit_msgs::msg::CollisionObject object2;
+    object2.id = "base_object";
+    object2.header.frame_id = "world";
+    object2.primitives.resize(1);
+    object2.primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
+    object2.primitives[0].dimensions = { 2.0, 2.0, 0.05 };
 
-	if (m_service_map.find(key) == m_service_map.end()) {
-		RCLCPP_ERROR(this->get_logger(), "Service key [%s] not found.", key.c_str());
-		return;
-	}
+    geometry_msgs::msg::Pose pose2;
+    pose2.position.x = 0.0;
+    pose2.position.y = 0.0;
+    pose2.position.z = -0.05;
+    pose2.orientation.w = 1.0;
+    object2.pose = pose2;
 
-	auto& info = m_service_map[key];
-
-	if (!info.client->wait_for_service(std::chrono::seconds(1))) {
-		RCLCPP_WARN(this->get_logger(), "[%s] Service not available", key.c_str());
-		return;
-	}
-
-	auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
-	m_waiting_for_response = true;
-	m_taskType = info.task_type;
-
-	info.client->async_send_request(request,
-	[this, key, &info](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
-	try {
-		auto response = future.get();
-		info.srv_response.success = response->success;
-		info.srv_response.message = response->message;
-
-		if (response->success) {
-			RCLCPP_INFO(this->get_logger(), "[%s] Service succeeded: %s", key.c_str(), response->message.c_str());
-		} else {
-			RCLCPP_ERROR(this->get_logger(), "[%s] Service failed: %s", key.c_str(), response->message.c_str());
-		}
-	}
-	catch (const std::exception& e) {
-		RCLCPP_ERROR(this->get_logger(), "[%s] Exception: %s", key.c_str(), e.what());
-	}
-		m_waiting_for_response = false;
-	}
-	);
-}
-
-
-void MoveitInterface::getTf(geometry_msgs::msg::Pose& input_pose,geometry_msgs::msg::Pose& output_pose,geometry_msgs::msg::TransformStamped& tfstamped, std::string target_frame,std::string source_frame)
-{
-	isTransformAvailable(input_pose, output_pose, tfstamped, target_frame, source_frame,0.5);
-	if (m_tfFound)
-	{
-		m_tfFound = false;
-	}
-	else
-	{
-		RCLCPP_ERROR(this->get_logger(), "Path Transform not found.");
-	}
-}
-
-
-void MoveitInterface::loadCSVToPoses(const std::string& filename, std::vector<geometry_msgs::msg::Pose>& dummyPath)
-{
-	std::ifstream file(filename);
-	std::string line;
-
-	while (std::getline(file, line)) {
-		std::stringstream ss(line);
-		std::string value;
-		std::vector<double> data;
-
-		// Parse comma-separated values into the `data` vector
-		while (std::getline(ss, value, ',')) {
-
-			// Trim whitespace
-			value.erase(std::remove_if(value.begin(), value.end(), ::isspace), value.end());
-
-			// Skip if value is empty
-			if (value.empty()) continue;
-			data.push_back(std::stod(value));
-		}
-
-		if (data.size() == 3) {
-			geometry_msgs::msg::Pose test_pose;
-			test_pose.position.x = data[0];
-			test_pose.position.y = data[1];
-			test_pose.position.z = data[2];
-			test_pose.orientation.w = 1.0;
-
-			dummyPath.push_back(test_pose);
-		} else {
-			RCLCPP_WARN(this->get_logger(), "Skipping malformed line: %s", line.c_str());
-		}
-	}
-}
-
-
-geometry_msgs::msg::Pose MoveitInterface::lookupPoseTransformStamped(std::string target_frame_id, std::string source_frame_id)
-{
-	geometry_msgs::msg::Pose tfPose;
-	try
-	{
-		geometry_msgs::msg::TransformStamped tfstamped = m_tfBuffer.lookupTransform(target_frame_id, source_frame_id, this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
-		tfPose.position.x = tfstamped.transform.translation.x;
-		tfPose.position.y = tfstamped.transform.translation.y;
-		tfPose.position.z = tfstamped.transform.translation.z;
-		tfPose.orientation.x = tfstamped.transform.rotation.x;
-		tfPose.orientation.y = tfstamped.transform.rotation.y;
-		tfPose.orientation.z = tfstamped.transform.rotation.z;
-		tfPose.orientation.w = tfstamped.transform.rotation.w;
-	}
-	catch (const tf2::TransformException& ex)
-	{
-		RCLCPP_WARN(rclcpp::get_logger("PoseLookup"), "TF lookup failed from %s to %s: %s", source_frame_id.c_str(), target_frame_id.c_str(), ex.what());
-	}
-	return tfPose;
-}
-
-bool MoveitInterface::generateStaticTFPose()
-{
-	std::string target_frame = "base_link";
-	std::string source_frame = "";
-
-	try
-	{
-		source_frame = "blue_button";
-		m_blueButtonPose = lookupPoseTransformStamped(target_frame, source_frame);
-		m_transformedPoses[source_frame] = m_blueButtonPose;
-
-		source_frame = "red_button";
-		m_redButtonPose = lookupPoseTransformStamped(target_frame, source_frame);
-		m_transformedPoses[source_frame] = m_redButtonPose;
-		
-		source_frame = "stylus";
-		m_stylusPose = lookupPoseTransformStamped(target_frame, source_frame);
-		m_transformedPoses[source_frame] = m_stylusPose;
-
-		source_frame = "maze";
-		m_mazePose = lookupPoseTransformStamped(target_frame, source_frame);
-		m_transformedPoses[source_frame] = m_mazePose;
-		
-		source_frame = "align_frame";
-		m_screenAlignPose = lookupPoseTransformStamped(target_frame, source_frame);
-		m_transformedPoses[source_frame] = m_screenAlignPose;
-		
-		source_frame = "screen";
-		m_screenPose = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenPose.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenPose;
-
-		source_frame = "A";
-		m_screenA = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenA.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenA;
-
-		source_frame = "B";
-		m_screenB = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenB.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenB;
-
-		source_frame = "Background";
-		m_screenBackground = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenBackground.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenBackground;
-
-		source_frame = "sq_up";
-		m_screenUp = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenUp.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenUp;
-
-		source_frame = "sq_down";
-		m_screenDown = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenDown.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenDown;
-
-		source_frame = "sq_left";
-		m_screenLeft = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenLeft.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenLeft;
-
-		source_frame = "sq_right";
-		m_screenRight = lookupPoseTransformStamped(target_frame, source_frame);
-		m_screenRight.orientation = m_screenAlignPose.orientation;
-		m_transformedPoses[source_frame] = m_screenRight;
-
-		loadCSVToPoses("/home/atu-2/robothon/src/moveit_interface/config/maze_path.csv",m_mazePath);
-
-		return true;
-	}
-	catch(const tf2::TransformException & ex)
-	{
-		RCLCPP_INFO(this->get_logger(), "Could not transform 'base_link' to 'screen': %s", ex.what());
-		return  false;
-	}
-}
-
-void MoveitInterface::reset()
-{
-	m_screenTaskCounter = 0;
-	m_frameStatus = false;
-	m_mazePath.clear();
-	m_mazePath.resize(0);
-	m_detectionPoses.clear();
-	m_detectionPoses.resize(0);
-	m_callShapeService = false;
-	m_callTextService = false;
+    scene_.applyCollisionObject(object2);
 }
 
 void MoveitInterface::run()
 {
-	if(m_config["custom_task"].as<bool>())
-	{
-		m_nextTaskType =  TaskType::BYOD;
-		m_state = InterfaceState::EXECUTE;
-	}
-
-	m_completed = true;
-	while (rclcpp::ok())
-	{
-		if(!m_completed)
-		{
-			switch (m_state)
-			{
-				case InterfaceState::IDLE:
-					RCLCPP_INFO(this->get_logger(), "State: IDLE -> BOARD_DETECTION");
-					m_state = InterfaceState::BOARD_DETECTION;
-					break;
-
-				case InterfaceState::BOARD_DETECTION:
-					{
-						RCLCPP_INFO(this->get_logger(), "State: BOARD_DETECTION -> WAIT_FOR_RESPONSE");
-						if(!m_service_map["localize_board"].srv_response.success)
-						{
-							callTriggerService("localize_board");
-						}
-						else
-							m_state = InterfaceState::WAIT_FOR_RESPONSE;
-						break;
-					}
-				case InterfaceState::WAIT_FOR_RESPONSE:
-					{
-						RCLCPP_INFO(this->get_logger(), "State: WAIT_FOR_RESPONSE -> CHECK_TF");
-						if (m_frameStatus) {
-							RCLCPP_INFO(this->get_logger(), "Frame received. Proceeding to TF check.");
-							m_service_map["localize_board"].srv_response.success = false;
-							m_waiting_for_response = false;
-							m_state = InterfaceState::CHECK_TF;
-						}
-						break;
-					}
-				case InterfaceState::CHECK_TF:
-					{
-						RCLCPP_INFO(this->get_logger(), "State: CHECK_TF -> EXECUTE");
-						m_movegroupInterface = std::make_shared<moveit::planning_interface::MoveGroupInterface>(this->shared_from_this(), "ur_manipulator");
-						setParams();
-						bool state = generateStaticTFPose();
-						if(state)
-						{
-							RCLCPP_INFO(this->get_logger(), "TF Lookup successful. Ready to proceed.");
-							bool gripper_state = true;
-							gripperService(gripper_state); //Open gripper
-							m_state = InterfaceState::EXECUTE;
-							m_nextTaskType =  TaskType::SPEED_PRESS; //start SPEED_PRESS
-						}
-						else
-						{
-							RCLCPP_INFO(this->get_logger(), "TF Lookup unsuccessful. retrying");
-						}
-						break;
-					}
-				case InterfaceState::EXECUTE:
-					{
-						RCLCPP_WARN(this->get_logger(), "State: EXECUTE -> DONE");
-						m_waiting_for_response = false; //To ensure all states are called freshly
-						executeTasks(m_nextTaskType);
-						break;
-					}
-				case InterfaceState::DONE:
-					{
-						RCLCPP_INFO(this->get_logger(), "All tasks completed. Staying in DONE state.");
-						m_completed = true;
-						break;
-					}
-			}
-		}
-		rclcpp::sleep_for(std::chrono::milliseconds(100));
-	}
-}
-
-void MoveitInterface::executeTasks(TaskType& task)
-{
-	switch(task)
-	{
-		case TaskType::NONE:
-		{
-			RCLCPP_ERROR(this->get_logger(),"No task type Defined, executing default");
-			m_taskType = TaskType::END;
-			m_state = InterfaceState::DONE;
-			break;
-		}
-
-		case TaskType::SPEED_PRESS:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: SPEED_PRESS");
-			bool state = executeSpeedPress();
-			if(state)
-				m_nextTaskType = TaskType::PRESS_BUTTONS;
-			break;
-		}
-
-		case TaskType::PRESS_BUTTONS:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: PRESS_BUTTONS");
-			bool state = executeButtonPress();
-			if(state)
-				m_nextTaskType = TaskType::GRAB_STYLUS_TOUCH;
-			break;
-		}
-
-		case TaskType::GRAB_STYLUS_TOUCH:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: GRAB_STYLUS_TOUCH");
-			bool state = executeGrabStylus(task);
-			if(state)
-				m_nextTaskType = TaskType::GRAB_STYLUS_MAGNET;
-			break;
-		}
-
-		case TaskType::SCREEN_SHAPE:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: SCREEN_SHAPE");
-			bool state = executeScreenMotion();
-			if(state)
-				m_nextTaskType = TaskType::SCREEN_TEXT;
-			break;
-		}
-
-		case TaskType::SCREEN_TEXT:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: SCREEN_TEXT");
-			bool state = executeScreenText();
-			if(state)
-				m_nextTaskType = TaskType::MAZE;
-			break;
-		}
-
-		case TaskType::GRAB_STYLUS_MAGNET:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: GRAB_STYLUS_MAGNET");
-			bool state = executeGrabStylus(task);
-			if(state)
-				m_nextTaskType = TaskType::SCREEN_SHAPE;
-			break;
-		}
-
-		case TaskType::MAZE:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: MAZE");
-			bool state = executeMaze();
-			if(state)
-				m_nextTaskType = TaskType::DROP_STYLUS;
-			break;
-		}
-		case TaskType::DROP_STYLUS:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: DROP_STYLUS");
-			bool state = executeDropStylus();
-			if(state)
-				m_nextTaskType = TaskType::END;
-			break;
-		}
-		case TaskType::BYOD:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: BYOD");
-			bool state = executeCustomTask();
-			if(state)
-				m_nextTaskType = TaskType::END;
-			break;
-		}
-		case TaskType::END:
-		{
-			RCLCPP_ERROR(this->get_logger(),"TaskType: END");
-			reset();
-			m_state = InterfaceState::DONE;
-			break;
-		}
-
-	}
-}
-
-bool MoveitInterface::executeMaze()
-{
-	std::string target_frame = "base_link";
-	std::string source_frame = "blue_button";
-	std::string current_task = "solve_maze";
-
-	try
-	{
-		geometry_msgs::msg::TransformStamped tfstamped;
-		tfstamped.transform.translation.x = m_transformedPoses[source_frame].position.x;
-		tfstamped.transform.translation.y = m_transformedPoses[source_frame].position.y;
-		tfstamped.transform.translation.z = m_transformedPoses[source_frame].position.z;
-		tfstamped.transform.rotation.x = m_transformedPoses[source_frame].orientation.x;
-		tfstamped.transform.rotation.y = m_transformedPoses[source_frame].orientation.y;
-		tfstamped.transform.rotation.z = m_transformedPoses[source_frame].orientation.z;
-		tfstamped.transform.rotation.w = m_transformedPoses[source_frame].orientation.w;
-
-		RCLCPP_INFO(this->get_logger(), "m_mazePath size: %zu", m_mazePath.size());
-
-		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-		named_poses["screen_align_pose"] = m_transformedPoses["align_frame"];
-		int index = 10;
-		for(auto pose : m_mazePath)
-		{
-			geometry_msgs::msg::Pose transformed_maze_pose;
-			tf2::doTransform(pose, transformed_maze_pose, tfstamped);
-			transformed_maze_pose.orientation = m_transformedPoses["align_frame"].orientation;
-			std::string name = "maze_pathpoint_" + std::to_string(index);
-			RCLCPP_INFO(this->get_logger(),"nameeeee %s", name.c_str());
-			named_poses[name] = transformed_maze_pose;
-			index++;
-		}
-
-		bool validTrajectory = false;
-		validTrajectory = createWaypointTrajectory(current_task, named_poses);
-		if(validTrajectory)
-		{
-			current_task = "retract_maze";
-			validTrajectory = createWaypointTrajectory(current_task, named_poses);
-			return validTrajectory;
-		}
-		else
-		{
-			RCLCPP_INFO(this->get_logger(), "Could not execute maze task");
-			return false;
-		}
-	}
-	catch(const std::exception& e)
-	{
-		RCLCPP_ERROR(this->get_logger(), "%s", e.what());
-		return false;
-	}
-}
-
-
-bool MoveitInterface::executeDropStylus()
-{
-	std::string current_task = "place_stylus"; 
-
-	std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-
-	named_poses["stylus_pose"] = m_transformedPoses["stylus"];
-
-	bool validTrajectory = false;
-	validTrajectory = createWaypointTrajectory(current_task, named_poses);
-
-	if(validTrajectory)
-	{
-		bool gripper_state = false;
-		gripperService(gripper_state);
-		current_task = "retract_stylus";
-		validTrajectory = createWaypointTrajectory(current_task, named_poses);
-		current_task = "home_pose";
-		validTrajectory = createWaypointTrajectory(current_task, named_poses);
-		return validTrajectory;
-	}
-	else
-	{
-		RCLCPP_INFO(this->get_logger(), "Could not reach stylus pose");
-		return false;
-	}
-}
-
-bool MoveitInterface::executeGrabStylus(TaskType& taskType)
-{
-	std::string current_task = ""; 
-	if(taskType == TaskType::GRAB_STYLUS_TOUCH)
-	{	
-		bool gripper_state = false;
-		bool serviceRequested = false;
-
-		gripperService(gripper_state); //Open gripper
-	
-		std::string current_task = "pick_stylus"; 
-	
-		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-
-		named_poses["stylus_pose"] = m_transformedPoses["stylus"];
-
-		bool validTrajectory = false;
-		validTrajectory = createWaypointTrajectory(current_task, named_poses);
-
-		if(validTrajectory)
-		{
-			
-			gripper_state = true;
-			gripperService(gripper_state);
-			sleep(1);
-			RCLCPP_INFO(this->get_logger(),"Waiting done");
-			current_task = "retract_stylus";
-			validTrajectory = createWaypointTrajectory(current_task, named_poses);
-			return validTrajectory;
-		}
-		else
-		{
-			RCLCPP_INFO(this->get_logger(), "Could not reach stylus pose");
-			return false;
-		}
-	}
-	else if(taskType == TaskType::GRAB_STYLUS_MAGNET)
-	{
-		current_task = "retract_stylus_invert"; 
-		geometry_msgs::msg::TransformStamped tfstamped = m_tfBuffer.lookupTransform("base_link", "stylus_calibration", this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
-		geometry_msgs::msg::Pose calibPose;
-		calibPose.position.x = tfstamped.transform.translation.x;
-		calibPose.position.y = tfstamped.transform.translation.y;
-		calibPose.position.z = tfstamped.transform.translation.z;
-		calibPose.orientation.x = tfstamped.transform.rotation.x;
-		calibPose.orientation.y = tfstamped.transform.rotation.y;
-		calibPose.orientation.z = tfstamped.transform.rotation.z;
-		calibPose.orientation.w = tfstamped.transform.rotation.w;
-
-		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-
-		named_poses["stylus_calibration_precise"] = calibPose;
-
-		bool validTrajectory = false;
-		validTrajectory = createWaypointTrajectory(current_task, named_poses);
-		return validTrajectory;
-
-	}
-
-}
-
-
-bool MoveitInterface::executeScreenText()
-{
-	std::string target_frame = "";
-	std::string source_frame = "";
-	std::string current_task = "";
-
-	{
-		if(!m_service_map["detect_text"].srv_response.success)
-		{
-			callTriggerService("detect_text");
-			return false;
-		}
-
-		if (m_screenCommand == "")
-		{
-			RCLCPP_INFO(this->get_logger(),"Waiting for m_screenCommand");
-			return false;
-		}
-			
-		current_task = "screen_text";
-		target_frame = "base_link";
-		
-        ParsedTask parsedTask;
-		parseTaskCommand(m_screenCommand,parsedTask);
-		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-
-		int repeat_count = 1;
-
-		RCLCPP_INFO(this->get_logger(), "ID: %d size %zu", parsedTask.id, parsedTask.task_names.size());
-		for (const auto& name : parsedTask.task_names)
-		{
-			RCLCPP_INFO(this->get_logger(), "Task from screen: %s", name.c_str());
-			source_frame = name;
-			geometry_msgs::msg::Pose targetPose;
-			try
-			{
-				targetPose = m_transformedPoses[name];
-				named_poses[name] = targetPose;
-				RCLCPP_INFO(this->get_logger(), "  pose: %.3f %.3f", targetPose.position.x, targetPose.position.y);
-			}
-			catch (const tf2::TransformException & ex) {
-				RCLCPP_INFO(this->get_logger(), "Could not transform 'base_link' to 'point on screen: %s", ex.what());
-				return  false;
-			}
-
-		}
-
-		named_poses["screen"] = m_transformedPoses["screen"];
-
-
-		if(m_config["planning"].as<bool>())
-		{
-			bool validTrajectory = false;
-			validTrajectory = createWaypointTrajectory(current_task, named_poses);
-			if(validTrajectory && m_screenTaskCounter < 2)
-			{
-				m_screenTaskCounter++;
-				m_service_map["detect_text"].srv_response.success = false;
-				return false;
-			}
-			else
-			{
-				current_task = "retract_align_screen";
-				bool homepose = createWaypointTrajectory(current_task, named_poses);
-				m_callTextService = false;
-				m_taskType = TaskType::END;
-				return true;
-			}
-		}
-	}
-}
-
-bool MoveitInterface::executeScreenMotion()
-{
-	std::string target_frame = "";
-	std::string source_frame = "";
-	std::string current_task = "";
-
-	RCLCPP_INFO(this->get_logger(), "m_callShapeService: %d", m_callShapeService);
-	if(!m_callShapeService)
-	{
-		current_task = "screen_approach";
-		source_frame = "align_frame";
-
-		std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-		named_poses["screen_align_pose"] = m_transformedPoses["align_frame"];
-		named_poses["screen"] = m_transformedPoses["screen"];
-		
-		bool validTrajectory = false;
-		validTrajectory = createWaypointTrajectory(current_task, named_poses);
-		m_callShapeService = validTrajectory;
-		return false;
-	}
-	else
-	{
-		RCLCPP_INFO(this->get_logger(), "m_labelData: %s", m_labelData.c_str());
-		if(!m_service_map["detect_shape"].srv_response.success)
-		{
-			callTriggerService("detect_shape");
-			return false;
-		}
-
-		if (m_shapePoses.poses.empty())
-		{
-			RCLCPP_INFO(this->get_logger(),"Waiting for detection");
-			return false;
-		}
-			
-		RCLCPP_INFO(this->get_logger(), "Shape Detected");
-		current_task = "screen_draw";
-		target_frame = "base_link";
-		source_frame = m_shapePoses.header.frame_id;
-
-		try
-		{
-			geometry_msgs::msg::TransformStamped tfstamped = m_tfBuffer.lookupTransform(target_frame, source_frame, this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
-
-			std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-			named_poses["background"] = m_transformedPoses["Background"];
-			int index = 0;
-			for(auto pose : m_shapePoses.poses)
-			{
-				geometry_msgs::msg::Pose temp;
-				getTf(pose,temp,tfstamped,target_frame,source_frame);
-				RCLCPP_DEBUG(this->get_logger(), " pose %.3f %.3f  temp %.3f %.3f",
-					pose.position.x, pose.position.y, temp.position.x, temp.position.y);
-				temp.position.z = m_transformedPoses["Background"].position.z;
-				std::string name = "screen_draw" + std::to_string(index);
-				named_poses[name] = temp;
-				index++;
-			}
-
-			named_poses["screen"] = m_transformedPoses["screen"];
-
-			bool validTrajectory = false;
-			validTrajectory = createWaypointTrajectory(current_task, named_poses);
-			if(validTrajectory && m_screenTaskCounter < m_maxAttempt)
-			{
-				m_screenTaskCounter++;
-				m_service_map["detect_shape"].srv_response.success = false;
-				return false;
-			}
-			else
-			{
-				m_screenTaskCounter = 0;
-				m_callShapeService = false;
-
-				m_taskType = TaskType::END;
-				return true;
-			}
-		}
-		catch (const tf2::TransformException & ex) {
-			RCLCPP_INFO(this->get_logger(), "Could not transform 'base_link' to 'camera': %s", ex.what());
-			return  false;
-		}
-	}
-}
-
-
-void MoveitInterface::parseTaskCommand(std::string& taskCommand,ParsedTask& parsedTask)
-{
-	std::vector<std::string> taskTokens;
-	std::string taskCmd = taskCommand;
-	std::stringstream ss(taskCmd);
-	while (std::getline(ss, taskCmd, ',')) {
-		taskCmd.erase(0, taskCmd.find_first_not_of(" \t"));
-		taskCmd.erase(taskCmd.find_last_not_of(" \t") + 1);
-		taskTokens.push_back(taskCmd);
-	}
-
-	if (!taskTokens.empty())
-	{
-		parsedTask.id = std::stoi(taskTokens[0]);
-
-		int repeat_count = (parsedTask.id == -1) ? 2 : std::max(1, parsedTask.id);
-
-		for (size_t i = 1; i < taskTokens.size(); ++i) {
-			const std::string& task_name = taskTokens[i];
-		
-			for (int j = 0; j < repeat_count; ++j) {
-				RCLCPP_INFO(this->get_logger(), "Adding task: %s [repeat %d]", task_name.c_str(), j + 1);
-				parsedTask.task_names.push_back(task_name); 	
-			}
-	}
-}
-}
-
-
-bool MoveitInterface::executeSpeedPress()
-{
-	RCLCPP_INFO(this->get_logger(), "executeSpeedPress");
-
-	std::string target_frame = "";
-	std::string source_frame = "";
-	std::string current_task = "speed_test"; 
-	
-	std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-	named_poses["blue_button"] = m_transformedPoses["blue_button"];
-	named_poses["red_button"] = m_transformedPoses["red_button"];
-
-	bool validTrajectory = false;
-	validTrajectory = createWaypointTrajectory(current_task, named_poses);
-	m_taskType = TaskType::END;
-	return validTrajectory;
-
-}
-
-
-
-bool MoveitInterface::executeButtonPress()
-{
-	std::string current_task = "";
-	if(m_service_map["detect_button"].srv_response.success)
-	{
-		if(m_buttonStatus != "None")
-		{
-			std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-			if(m_buttonStatus == "Red")
-			{
-				current_task = "press_red_button";
-				named_poses["red_button"] = m_transformedPoses["red_button"];
-
-			}
-			else
-			{
-				current_task = "press_blue_button";
-				named_poses["blue_button"] = m_transformedPoses["blue_button"];;
-
-			}
-
-			bool validTrajectory = false;
-			validTrajectory = createWaypointTrajectory(current_task, named_poses);
-			m_service_map["detect_button"].srv_response.success = false;
-			m_taskType = TaskType::END;
-			return validTrajectory;
-		}
-		else
-		{
-			return false;
-		}
-	}
-	else
-	{
-		callTriggerService("detect_button");
-		return false;
-	}
-}
-
-bool MoveitInterface::executeCustomTask()
-{
-	std::string target_frame = "";
-	std::string source_frame = "";
-	std::string current_task = "";
-
-	{
-		RCLCPP_INFO(this->get_logger(), "color_sort service response: %d", m_service_map["color_sort"].srv_response.success);
-		if(!m_service_map["color_sort"].srv_response.success)
-		{
-			callTriggerService("color_sort");
-			return false;
-		}
-
-		if (m_detectionPoses.empty())
-		{
-			RCLCPP_INFO(this->get_logger(),"Waiting for detection");
-			return false;
-		}
-			
-		if (m_screenCommand == "")
-		{
-			RCLCPP_INFO(this->get_logger(),"Waiting for m_screenCommand");
-			return false;
-		}
-
-		current_task = m_screenCommand; //Input from topic
-		target_frame = "base_link";
-		source_frame = "camera_color_optical_frame";
-
-		std::map<std::string, std::vector<geometry_msgs::msg::Pose>> sortingPoses;
-
-		try
-		{
-			RCLCPP_INFO(this->get_logger(), "%d ",m_detectionPoses.size());
-			geometry_msgs::msg::TransformStamped tfstamped = m_tfBuffer.lookupTransform(target_frame, source_frame, this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
-			geometry_msgs::msg::TransformStamped tfstamped_gripper = m_tfBuffer.lookupTransform(target_frame, "ee_touch", this->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
-
-			std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-			for(auto detection_array : m_detectionPoses)
-			{
-				std::string name = detection_array.header.frame_id + "_object";
-				for (auto pose : detection_array.poses)
-				{
-					geometry_msgs::msg::Pose objPose;
-					getTf(pose,objPose,tfstamped,target_frame,source_frame);
-					objPose.orientation = tfstamped_gripper.transform.rotation;
-					sortingPoses[name].push_back(objPose);
-				}
-			}
-
-			RCLCPP_INFO(this->get_logger(), "%d ",sortingPoses.size());
-
-			for (const auto& [bin, poses] : sortingPoses) {
-				RCLCPP_INFO(this->get_logger(), "Bin: %s", bin.c_str());
-				for (const auto& pose : poses) {
-					RCLCPP_INFO(this->get_logger(), "  x: %.2f y: %.2f z: %.2f",
-								pose.position.x, pose.position.y, pose.position.z);
-				}
-			}
-
-
-			for (const auto& [key, pose_vector] : sortingPoses) {
-				if (!pose_vector.empty()) {
-					RCLCPP_INFO(this->get_logger(), "key: %s", key.c_str());
-					named_poses[key] = pose_vector[0];  // or whatever logic you want
-				}
-			}
-			
-			bool validTrajectory = false;
-			validTrajectory = createWaypointTrajectory(current_task, named_poses);
-			m_service_map["color_sort"].srv_response.success = false;
-			return validTrajectory;
-		}
-		catch (const tf2::TransformException & ex) {
-			RCLCPP_INFO(this->get_logger(), "Could not transform 'base_link' to 'camera': %s", ex.what());
-			return  false;
-		}
-	}
-}
-
-
-void MoveitInterface::setupPlanningScene()
-{
-	moveit_msgs::msg::CollisionObject object2;
-	object2.id = "base_object";
-	object2.header.frame_id = "world";
-	object2.primitives.resize(1);
-	object2.primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
-	object2.primitives[0].dimensions = { 2.0, 2.0, 0.05 };
-
-	geometry_msgs::msg::Pose pose2;
-	pose2.position.x = 0.0;
-	pose2.position.y = 0.0;
-	pose2.position.z = -0.05;
-	pose2.orientation.w = 1.0;
-	object2.pose = pose2;
-
-	scene_.applyCollisionObject(object2);
-
-}
-
-bool MoveitInterface::doTask(std::string& current_task, std::map<std::string, geometry_msgs::msg::Pose>& waypoints)
-{
-	RCLCPP_INFO(this->get_logger(),"Create task");
-	task_ = createTask(current_task, waypoints);
-
-	try
-	{
-		task_.init();
-	}
-	catch (mtc::InitStageException& e)
-	{
-		RCLCPP_ERROR_STREAM(this->get_logger(), e);
-		return false;
-	}
-
-	if (!task_.plan(15))
-	{
-		RCLCPP_ERROR_STREAM(this->get_logger(), "Task planning failed");
-		return false;
-	}
-	task_.introspection().publishSolution(*task_.solutions().front());
-
-	if (m_config["execute"].as<bool>(true)) {
-		auto result = task_.execute(*task_.solutions().front());
-		if (result.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
-		{
-			RCLCPP_ERROR_STREAM(this->get_logger(), "Task execution failed");
-			return false;
-		}
-	}
-
-	return true;
-}
-
-void MoveitInterface::addStagesFromYaml(mtc::Task& task, const YAML::Node& task_config, const std::map<std::string, geometry_msgs::msg::Pose>& named_poses, std::map<std::string, mtc::solvers::PlannerInterfacePtr>& planners, const std::string& group_name, const std::string& hand_frame)
-{
-
-	RCLCPP_INFO(this->get_logger(),"addStagesFromYaml");
-	for (const auto& stage_node : task_config["stages"])
-	{
-
-		std::string type = stage_node["type"].as<std::string>();
-		std::string name = stage_node["name"].as<std::string>();
-		std::string planner_name = stage_node["planner"].as<std::string>();
-		double min_distance = 0.1;
-		double max_distance = 0.1;
-
-		std::string hand_frame_name = "";
-		
-		auto getPlanner = [&](const std::string& name) -> mtc::solvers::PlannerInterfacePtr {
-			return planners.at(name);
-		};
-		
-		auto planner = getPlanner(planner_name);
-		if(stage_node["hand_frame"]) { hand_frame_name = stage_node["hand_frame"].as<std::string>(); }
-		else hand_frame_name = hand_frame;
-		
-		if(stage_node["minmax_dist"])
-		{
-			min_distance = stage_node["minmax_dist"][0].as<double>();
-			max_distance = stage_node["minmax_dist"][1].as<double>();
-		}
-		
-		if(stage_node["vel_acc"])
-		{
-			planner->setMaxVelocityScalingFactor(stage_node["vel_acc"][0].as<double>());
-			planner->setMaxAccelerationScalingFactor(stage_node["vel_acc"][1].as<double>());
-		}
-
-		RCLCPP_INFO(this->get_logger(),"TASK TYPE %s",type.c_str());
-
-		if(type == "move_to")
-		{
-			std::string target_name = stage_node["target"].as<std::string>();
-			auto stage = std::make_unique<mtc::stages::MoveTo>(name, planner);
-
-			stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
-			stage->setGroup(group_name);
-			stage->setIKFrame(hand_frame);
-
-			RCLCPP_INFO(this->get_logger(), "move_to target: %s", target_name.c_str());
-			if(target_name != "home_camera_vertical" && target_name != "home_camera" && target_name != "home_camera_touch" && target_name != "home_camera_magnet" && target_name != "stylus_calibration")
-			{
-				auto pose = named_poses.at(target_name);
-				double off_x = 0.0, off_y = 0.0, off_z = 0.0;
-				if (stage_node["offset"]) {
-					off_x = stage_node["offset"][0].as<double>();
-					off_y = stage_node["offset"][1].as<double>();
-					off_z = stage_node["offset"][2].as<double>();
-				}
-				geometry_msgs::msg::PoseStamped offset_pose;
-				offset_pose.header.frame_id = "base_link";
-				offset_pose.pose = pose;
-				offset_pose.pose.position.x += off_x;
-				offset_pose.pose.position.y += off_y;
-				offset_pose.pose.position.z += off_z;
-				stage->setGoal(offset_pose);
-			}
-			else if(target_name == "home_camera") //Requires string parse from srdf
-			{
-				stage->setGoal("home_camera");
-			}
-			else if(target_name == "home_camera_touch")
-			{
-				stage->setGoal("home_camera_touch");
-			}
-			else if(target_name == "home_camera_magnet")
-			{
-				stage->setGoal("home_camera_magnet");
-			}
-			else if(target_name == "stylus_calibration")
-			{
-				stage->setGoal("stylus_calibration");
-			}
-			else
-			{
-				stage->setGoal("home_camera_vertical");
-			}
-			task.add(std::move(stage));
-
-		}
-		else if (type == "move_relative")
-		{
-			auto dir_vals = stage_node["direction"];
-			std::string frame_id = "world";
-			if(stage_node["frame"])
-			{
-				RCLCPP_INFO(this->get_logger(), "Frame defined: %s", stage_node["frame"].as<std::string>().c_str());
-				frame_id = stage_node["frame"].as<std::string>();
-			}
-			geometry_msgs::msg::Vector3 dir;
-			dir.x = dir_vals[0].as<double>();
-			dir.y = dir_vals[1].as<double>();
-			dir.z = dir_vals[2].as<double>();
-
-			auto stage = std::make_unique<mtc::stages::MoveRelative>(name, planner);
-			stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
-			stage->setGroup(group_name);
-			stage->setMinMaxDistance(min_distance, max_distance);  // Optional: load from YAML
-			stage->setIKFrame(hand_frame);
-
-			geometry_msgs::msg::Vector3Stamped vec;
-			vec.header.frame_id = frame_id;
-			vec.vector = dir;
-			stage->setDirection(vec);
-
-			task.add(std::move(stage));
-		}
-		else
-		{
-			RCLCPP_INFO(this->get_logger(),"Creating serial ");
-			auto path = std::make_unique<mtc::SerialContainer>("follow path");
-			task.properties().exposeTo(path->properties(), { "group", "ik_frame" });
-			path->properties().configureInitFrom(mtc::Stage::PARENT,
-													{ "group", "ik_frame" });
-			
-			std::string target_name = stage_node["target"].as<std::string>();
-			int index = 0;
-			for(auto& [path_point_name, path_point] : named_poses)
-			{
-				if(path_point_name == "screen" || path_point_name == "screen_align_pose")
-					continue;
-				auto stage = std::make_unique<mtc::stages::MoveTo>(path_point_name, planner);
-				RCLCPP_INFO(this->get_logger(),"target %s path_point_name %s",target_name.c_str(),  path_point_name.c_str());
-				stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
-				stage->setGroup(group_name);
-				stage->setIKFrame(hand_frame);
-
-				auto pose = named_poses.at(path_point_name);
-				auto offset_vals = stage_node["offset"];
-				geometry_msgs::msg::PointStamped offset_pose;
-				offset_pose.header.frame_id = "base_link";
-				offset_pose.point.x = pose.position.x + offset_vals[0].as<double>();
-				offset_pose.point.y = pose.position.y + offset_vals[1].as<double>();
-				offset_pose.point.z = pose.position.z + offset_vals[2].as<double>();
-				stage->setGoal(offset_pose);
-				path->insert(std::move(stage));
-				index++;
-			}
-			task.add(std::move(path));
-		}
-	}
-}
-
-mtc::Task MoveitInterface::createTask(std::string& current_task, std::map<std::string, geometry_msgs::msg::Pose>& waypoints)
-{
-	mtc::Task task;
-	task.stages()->setName(current_task);
-	task.loadRobotModel(this->shared_from_this());
-
-	std::string hand_frame_config = "ee_gripper";
-
-	if(m_config["tasks"][current_task]["hand_frame"])
-	{
-		hand_frame_config = m_config["tasks"][current_task]["hand_frame"].as<std::string>();
-		RCLCPP_INFO(this->get_logger(), "hand_frame_config: %s", hand_frame_config.c_str());
-	}
-
-	const auto& arm_group_name = "ur_manipulator";
-	const auto& hand_frame = hand_frame_config;
-
-	// Set task properties
-	task.setProperty("group", arm_group_name);
-	task.setProperty("ik_frame", hand_frame);
-
-	
-	// Disable warnings for this line, as it's a variable that's set but not used in this example
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
-	mtc::Stage* current_state_ptr = nullptr;  // Forward current_state on to grasp pose generator
-#pragma GCC diagnostic pop
-
-	auto stage_state_current = std::make_unique<mtc::stages::CurrentState>("current");
-	current_state_ptr = stage_state_current.get();
-	task.add(std::move(stage_state_current));
-
-	auto sampling_planner = std::make_shared<mtc::solvers::PipelinePlanner>(this->shared_from_this());
-	auto interpolation_planner = std::make_shared<mtc::solvers::JointInterpolationPlanner>();
-
-	auto cartesian_planner = std::make_shared<mtc::solvers::CartesianPath>();
-
-	std::map<std::string, mtc::solvers::PlannerInterfacePtr> planners;
-	planners["cartesian"] = cartesian_planner;
-	planners["interpolation"] = interpolation_planner;
-	planners["sampling_planner"] = sampling_planner;
-
-	cartesian_planner->setMaxVelocityScalingFactor(0.2);
-	cartesian_planner->setMaxAccelerationScalingFactor(0.2);
-	cartesian_planner->setStepSize(.01);
-
-	interpolation_planner->setMaxVelocityScalingFactor(0.2);
-	interpolation_planner->setMaxAccelerationScalingFactor(0.2);
-
-	addStagesFromYaml(task, m_config["tasks"][current_task], waypoints, planners, arm_group_name, hand_frame);
-	return task;
+    if (m_config["custom_task"].as<bool>())
+    {
+        m_nextTaskType = TaskType::BYOD;
+        m_state = InterfaceState::EXECUTE;
+    }
+
+    m_completed = true;
+    while (rclcpp::ok())
+    {
+        if (!m_completed)
+        {
+            switch (m_state)
+            {
+                case InterfaceState::IDLE:
+                    RCLCPP_INFO(this->get_logger(), "State: IDLE -> BOARD_DETECTION");
+                    m_state = InterfaceState::BOARD_DETECTION;
+                    break;
+
+                case InterfaceState::BOARD_DETECTION:
+                {
+                    RCLCPP_INFO(this->get_logger(), "State: BOARD_DETECTION -> WAIT_FOR_RESPONSE");
+                    if (!m_perception->m_service_map["localize_board"].srv_response.success)
+                    {
+                        m_perception->callTriggerService("localize_board");
+                    }
+                    else
+                        m_state = InterfaceState::WAIT_FOR_RESPONSE;
+                    break;
+                }
+
+                case InterfaceState::WAIT_FOR_RESPONSE:
+                {
+                    RCLCPP_INFO(this->get_logger(), "State: WAIT_FOR_RESPONSE -> CHECK_TF");
+                    if (m_perception->m_frameStatus) {
+                        RCLCPP_INFO(this->get_logger(), "Frame received. Proceeding to TF check.");
+                        m_perception->m_service_map["localize_board"].srv_response.success = false;
+                        m_perception->m_waiting_for_response = false;
+                        m_state = InterfaceState::CHECK_TF;
+                    }
+                    break;
+                }
+
+                case InterfaceState::CHECK_TF:
+                {
+                    RCLCPP_INFO(this->get_logger(), "State: CHECK_TF -> EXECUTE");
+                    m_movegroupInterface = std::make_shared<MoveGroupInterface>(this->shared_from_this(), "ur_manipulator");
+                    setParams();
+                    bool state = m_orchestrator->generateStaticTFPose();
+                    if (state)
+                    {
+                        RCLCPP_INFO(this->get_logger(), "TF Lookup successful. Ready to proceed.");
+                        bool gripper_state = true;
+                        m_gripper->gripperService(gripper_state); // Open gripper
+                        m_state = InterfaceState::EXECUTE;
+                        m_nextTaskType = TaskType::SPEED_PRESS; // start SPEED_PRESS
+                    }
+                    else
+                    {
+                        RCLCPP_INFO(this->get_logger(), "TF Lookup unsuccessful. retrying");
+                    }
+                    break;
+                }
+
+                case InterfaceState::EXECUTE:
+                {
+                    RCLCPP_WARN(this->get_logger(), "State: EXECUTE -> DONE");
+                    m_perception->m_waiting_for_response = false; // To ensure all states are called freshly
+                    m_orchestrator->executeTasks(m_nextTaskType, m_state);
+                    break;
+                }
+
+                case InterfaceState::DONE:
+                {
+                    RCLCPP_INFO(this->get_logger(), "All tasks completed. Staying in DONE state.");
+                    m_completed = true;
+                    break;
+                }
+            }
+        }
+        rclcpp::sleep_for(std::chrono::milliseconds(100));
+    }
 }

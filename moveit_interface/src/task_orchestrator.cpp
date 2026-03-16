@@ -1,0 +1,564 @@
+#include "task_orchestrator.h"
+
+#if __has_include(<tf2_geometry_msgs/tf2_geometry_msgs.hpp>)
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#else
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#endif
+
+TaskOrchestrator::TaskOrchestrator(
+    rclcpp::Node* node,
+    PerceptionBridge* perception,
+    GripperController* gripper,
+    TaskConfigInterpreter* interpreter)
+    : m_node(node)
+    , m_perception(perception)
+    , m_gripper(gripper)
+    , m_interpreter(interpreter)
+{
+}
+
+bool TaskOrchestrator::doTask(std::string& task_name, std::map<std::string, geometry_msgs::msg::Pose>& poses)
+{
+    return m_interpreter->doTask(task_name, poses);
+}
+
+void TaskOrchestrator::reset()
+{
+    m_screenTaskCounter = 0;
+    m_callShapeService = false;
+    m_callTextService = false;
+    m_perception->resetState();
+}
+
+bool TaskOrchestrator::generateStaticTFPose()
+{
+    return m_perception->generateStaticTFPose();
+}
+
+void TaskOrchestrator::executeTasks(TaskType& task, InterfaceState& out_state)
+{
+    switch (task)
+    {
+        case TaskType::NONE:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "No task type Defined, executing default");
+            m_taskType = TaskType::END;
+            out_state = InterfaceState::DONE;
+            break;
+        }
+
+        case TaskType::SPEED_PRESS:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: SPEED_PRESS");
+            bool state = executeSpeedPress();
+            if (state)
+                task = TaskType::PRESS_BUTTONS;
+            break;
+        }
+
+        case TaskType::PRESS_BUTTONS:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: PRESS_BUTTONS");
+            bool state = executeButtonPress();
+            if (state)
+                task = TaskType::GRAB_STYLUS_TOUCH;
+            break;
+        }
+
+        case TaskType::GRAB_STYLUS_TOUCH:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: GRAB_STYLUS_TOUCH");
+            bool state = executeGrabStylus(task);
+            if (state)
+                task = TaskType::GRAB_STYLUS_MAGNET;
+            break;
+        }
+
+        case TaskType::SCREEN_SHAPE:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: SCREEN_SHAPE");
+            bool state = executeScreenMotion();
+            if (state)
+                task = TaskType::SCREEN_TEXT;
+            break;
+        }
+
+        case TaskType::SCREEN_TEXT:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: SCREEN_TEXT");
+            bool state = executeScreenText();
+            if (state)
+                task = TaskType::MAZE;
+            break;
+        }
+
+        case TaskType::GRAB_STYLUS_MAGNET:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: GRAB_STYLUS_MAGNET");
+            bool state = executeGrabStylus(task);
+            if (state)
+                task = TaskType::SCREEN_SHAPE;
+            break;
+        }
+
+        case TaskType::MAZE:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: MAZE");
+            bool state = executeMaze();
+            if (state)
+                task = TaskType::DROP_STYLUS;
+            break;
+        }
+
+        case TaskType::DROP_STYLUS:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: DROP_STYLUS");
+            bool state = executeDropStylus();
+            if (state)
+                task = TaskType::END;
+            break;
+        }
+
+        case TaskType::BYOD:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: BYOD");
+            bool state = executeCustomTask();
+            if (state)
+                task = TaskType::END;
+            break;
+        }
+
+        case TaskType::END:
+        {
+            RCLCPP_ERROR(m_node->get_logger(), "TaskType: END");
+            reset();
+            out_state = InterfaceState::DONE;
+            break;
+        }
+    }
+}
+
+bool TaskOrchestrator::executeMaze()
+{
+    std::string target_frame = "base_link";
+    std::string source_frame = "blue_button";
+    std::string current_task = "solve_maze";
+
+    try
+    {
+        geometry_msgs::msg::TransformStamped tfstamped;
+        tfstamped.transform.translation.x = m_perception->m_transformedPoses[source_frame].position.x;
+        tfstamped.transform.translation.y = m_perception->m_transformedPoses[source_frame].position.y;
+        tfstamped.transform.translation.z = m_perception->m_transformedPoses[source_frame].position.z;
+        tfstamped.transform.rotation.x = m_perception->m_transformedPoses[source_frame].orientation.x;
+        tfstamped.transform.rotation.y = m_perception->m_transformedPoses[source_frame].orientation.y;
+        tfstamped.transform.rotation.z = m_perception->m_transformedPoses[source_frame].orientation.z;
+        tfstamped.transform.rotation.w = m_perception->m_transformedPoses[source_frame].orientation.w;
+
+        RCLCPP_INFO(m_node->get_logger(), "m_mazePath size: %zu", m_perception->m_mazePath.size());
+
+        std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+        named_poses["screen_align_pose"] = m_perception->m_transformedPoses["align_frame"];
+        int index = 10;
+        for (auto pose : m_perception->m_mazePath)
+        {
+            geometry_msgs::msg::Pose transformed_maze_pose;
+            tf2::doTransform(pose, transformed_maze_pose, tfstamped);
+            transformed_maze_pose.orientation = m_perception->m_transformedPoses["align_frame"].orientation;
+            std::string name = "maze_pathpoint_" + std::to_string(index);
+            RCLCPP_INFO(m_node->get_logger(), "nameeeee %s", name.c_str());
+            named_poses[name] = transformed_maze_pose;
+            index++;
+        }
+
+        bool validTrajectory = false;
+        validTrajectory = doTask(current_task, named_poses);
+        if (validTrajectory)
+        {
+            current_task = "retract_maze";
+            validTrajectory = doTask(current_task, named_poses);
+            return validTrajectory;
+        }
+        else
+        {
+            RCLCPP_INFO(m_node->get_logger(), "Could not execute maze task");
+            return false;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        RCLCPP_ERROR(m_node->get_logger(), "%s", e.what());
+        return false;
+    }
+}
+
+bool TaskOrchestrator::executeDropStylus()
+{
+    std::string current_task = "place_stylus";
+
+    std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+    named_poses["stylus_pose"] = m_perception->m_transformedPoses["stylus"];
+
+    bool validTrajectory = false;
+    validTrajectory = doTask(current_task, named_poses);
+
+    if (validTrajectory)
+    {
+        bool gripper_state = false;
+        m_gripper->gripperService(gripper_state);
+        current_task = "retract_stylus";
+        validTrajectory = doTask(current_task, named_poses);
+        current_task = "home_pose";
+        validTrajectory = doTask(current_task, named_poses);
+        return validTrajectory;
+    }
+    else
+    {
+        RCLCPP_INFO(m_node->get_logger(), "Could not reach stylus pose");
+        return false;
+    }
+}
+
+bool TaskOrchestrator::executeGrabStylus(TaskType& taskType)
+{
+    std::string current_task = "";
+    if (taskType == TaskType::GRAB_STYLUS_TOUCH)
+    {
+        bool gripper_state = false;
+        m_gripper->gripperService(gripper_state); // Open gripper
+
+        current_task = "pick_stylus";
+
+        std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+        named_poses["stylus_pose"] = m_perception->m_transformedPoses["stylus"];
+
+        bool validTrajectory = false;
+        validTrajectory = doTask(current_task, named_poses);
+
+        if (validTrajectory)
+        {
+            gripper_state = true;
+            m_gripper->gripperService(gripper_state);
+            sleep(1);
+            RCLCPP_INFO(m_node->get_logger(), "Waiting done");
+            current_task = "retract_stylus";
+            validTrajectory = doTask(current_task, named_poses);
+            return validTrajectory;
+        }
+        else
+        {
+            RCLCPP_INFO(m_node->get_logger(), "Could not reach stylus pose");
+            return false;
+        }
+    }
+    else if (taskType == TaskType::GRAB_STYLUS_MAGNET)
+    {
+        current_task = "retract_stylus_invert";
+        geometry_msgs::msg::TransformStamped tfstamped = m_perception->getTfBuffer().lookupTransform("base_link", "stylus_calibration", m_node->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+        geometry_msgs::msg::Pose calibPose;
+        calibPose.position.x = tfstamped.transform.translation.x;
+        calibPose.position.y = tfstamped.transform.translation.y;
+        calibPose.position.z = tfstamped.transform.translation.z;
+        calibPose.orientation.x = tfstamped.transform.rotation.x;
+        calibPose.orientation.y = tfstamped.transform.rotation.y;
+        calibPose.orientation.z = tfstamped.transform.rotation.z;
+        calibPose.orientation.w = tfstamped.transform.rotation.w;
+
+        std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+        named_poses["stylus_calibration_precise"] = calibPose;
+
+        bool validTrajectory = false;
+        validTrajectory = doTask(current_task, named_poses);
+        return validTrajectory;
+    }
+
+    return false;
+}
+
+bool TaskOrchestrator::executeScreenText()
+{
+    std::string target_frame = "";
+    std::string source_frame = "";
+    std::string current_task = "";
+
+    {
+        if (!m_perception->m_service_map["detect_text"].srv_response.success)
+        {
+            m_perception->callTriggerService("detect_text");
+            return false;
+        }
+
+        if (m_perception->m_screenCommand == "")
+        {
+            RCLCPP_INFO(m_node->get_logger(), "Waiting for m_screenCommand");
+            return false;
+        }
+
+        current_task = "screen_text";
+        target_frame = "base_link";
+
+        ParsedTask parsedTask;
+        m_perception->parseTaskCommand(m_perception->m_screenCommand, parsedTask);
+        std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+
+        RCLCPP_INFO(m_node->get_logger(), "ID: %d size %zu", parsedTask.id, parsedTask.task_names.size());
+        for (const auto& name : parsedTask.task_names)
+        {
+            RCLCPP_INFO(m_node->get_logger(), "Task from screen: %s", name.c_str());
+            source_frame = name;
+            geometry_msgs::msg::Pose targetPose;
+            try
+            {
+                targetPose = m_perception->m_transformedPoses[name];
+                named_poses[name] = targetPose;
+                RCLCPP_INFO(m_node->get_logger(), "  pose: %.3f %.3f", targetPose.position.x, targetPose.position.y);
+            }
+            catch (const tf2::TransformException& ex) {
+                RCLCPP_INFO(m_node->get_logger(), "Could not transform 'base_link' to 'point on screen: %s", ex.what());
+                return false;
+            }
+        }
+
+        named_poses["screen"] = m_perception->m_transformedPoses["screen"];
+
+        if (m_interpreter->config()["planning"].as<bool>())
+        {
+            bool validTrajectory = false;
+            validTrajectory = doTask(current_task, named_poses);
+            if (validTrajectory && m_screenTaskCounter < 2)
+            {
+                m_screenTaskCounter++;
+                m_perception->m_service_map["detect_text"].srv_response.success = false;
+                return false;
+            }
+            else
+            {
+                current_task = "retract_align_screen";
+                bool homepose = doTask(current_task, named_poses);
+                m_callTextService = false;
+                m_taskType = TaskType::END;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool TaskOrchestrator::executeScreenMotion()
+{
+    std::string target_frame = "";
+    std::string source_frame = "";
+    std::string current_task = "";
+
+    RCLCPP_INFO(m_node->get_logger(), "m_callShapeService: %d", m_callShapeService);
+    if (!m_callShapeService)
+    {
+        current_task = "screen_approach";
+        source_frame = "align_frame";
+
+        std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+        named_poses["screen_align_pose"] = m_perception->m_transformedPoses["align_frame"];
+        named_poses["screen"] = m_perception->m_transformedPoses["screen"];
+
+        bool validTrajectory = false;
+        validTrajectory = doTask(current_task, named_poses);
+        m_callShapeService = validTrajectory;
+        return false;
+    }
+    else
+    {
+        RCLCPP_INFO(m_node->get_logger(), "m_labelData: %s", m_perception->m_labelData.c_str());
+        if (!m_perception->m_service_map["detect_shape"].srv_response.success)
+        {
+            m_perception->callTriggerService("detect_shape");
+            return false;
+        }
+
+        if (m_perception->m_shapePoses.poses.empty())
+        {
+            RCLCPP_INFO(m_node->get_logger(), "Waiting for detection");
+            return false;
+        }
+
+        RCLCPP_INFO(m_node->get_logger(), "Shape Detected");
+        current_task = "screen_draw";
+        target_frame = "base_link";
+        source_frame = m_perception->m_shapePoses.header.frame_id;
+
+        try
+        {
+            geometry_msgs::msg::TransformStamped tfstamped = m_perception->getTfBuffer().lookupTransform(target_frame, source_frame, m_node->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+
+            std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+            named_poses["background"] = m_perception->m_transformedPoses["Background"];
+            int index = 0;
+            for (auto pose : m_perception->m_shapePoses.poses)
+            {
+                geometry_msgs::msg::Pose temp;
+                m_perception->getTf(pose, temp, tfstamped, target_frame, source_frame);
+                RCLCPP_DEBUG(m_node->get_logger(), " pose %.3f %.3f  temp %.3f %.3f",
+                    pose.position.x, pose.position.y, temp.position.x, temp.position.y);
+                temp.position.z = m_perception->m_transformedPoses["Background"].position.z;
+                std::string name = "screen_draw" + std::to_string(index);
+                named_poses[name] = temp;
+                index++;
+            }
+
+            named_poses["screen"] = m_perception->m_transformedPoses["screen"];
+
+            bool validTrajectory = false;
+            validTrajectory = doTask(current_task, named_poses);
+            if (validTrajectory && m_screenTaskCounter < m_maxAttempt)
+            {
+                m_screenTaskCounter++;
+                m_perception->m_service_map["detect_shape"].srv_response.success = false;
+                return false;
+            }
+            else
+            {
+                m_screenTaskCounter = 0;
+                m_callShapeService = false;
+                m_taskType = TaskType::END;
+                return true;
+            }
+        }
+        catch (const tf2::TransformException& ex) {
+            RCLCPP_INFO(m_node->get_logger(), "Could not transform 'base_link' to 'camera': %s", ex.what());
+            return false;
+        }
+    }
+}
+
+bool TaskOrchestrator::executeSpeedPress()
+{
+    RCLCPP_INFO(m_node->get_logger(), "executeSpeedPress");
+
+    std::string current_task = "speed_test";
+
+    std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+    named_poses["blue_button"] = m_perception->m_transformedPoses["blue_button"];
+    named_poses["red_button"] = m_perception->m_transformedPoses["red_button"];
+
+    bool validTrajectory = false;
+    validTrajectory = doTask(current_task, named_poses);
+    m_taskType = TaskType::END;
+    return validTrajectory;
+}
+
+bool TaskOrchestrator::executeButtonPress()
+{
+    std::string current_task = "";
+    if (m_perception->m_service_map["detect_button"].srv_response.success)
+    {
+        if (m_perception->m_buttonStatus != "None")
+        {
+            std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+            if (m_perception->m_buttonStatus == "Red")
+            {
+                current_task = "press_red_button";
+                named_poses["red_button"] = m_perception->m_transformedPoses["red_button"];
+            }
+            else
+            {
+                current_task = "press_blue_button";
+                named_poses["blue_button"] = m_perception->m_transformedPoses["blue_button"];
+            }
+
+            bool validTrajectory = false;
+            validTrajectory = doTask(current_task, named_poses);
+            m_perception->m_service_map["detect_button"].srv_response.success = false;
+            m_taskType = TaskType::END;
+            return validTrajectory;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    else
+    {
+        m_perception->callTriggerService("detect_button");
+        return false;
+    }
+}
+
+bool TaskOrchestrator::executeCustomTask()
+{
+    std::string target_frame = "";
+    std::string source_frame = "";
+    std::string current_task = "";
+
+    {
+        RCLCPP_INFO(m_node->get_logger(), "color_sort service response: %d", m_perception->m_service_map["color_sort"].srv_response.success);
+        if (!m_perception->m_service_map["color_sort"].srv_response.success)
+        {
+            m_perception->callTriggerService("color_sort");
+            return false;
+        }
+
+        if (m_perception->m_detectionPoses.empty())
+        {
+            RCLCPP_INFO(m_node->get_logger(), "Waiting for detection");
+            return false;
+        }
+
+        if (m_perception->m_screenCommand == "")
+        {
+            RCLCPP_INFO(m_node->get_logger(), "Waiting for m_screenCommand");
+            return false;
+        }
+
+        current_task = m_perception->m_screenCommand; // Input from topic
+        target_frame = "base_link";
+        source_frame = "camera_color_optical_frame";
+
+        std::map<std::string, std::vector<geometry_msgs::msg::Pose>> sortingPoses;
+
+        try
+        {
+            RCLCPP_INFO(m_node->get_logger(), "%d ", (int)m_perception->m_detectionPoses.size());
+            geometry_msgs::msg::TransformStamped tfstamped = m_perception->getTfBuffer().lookupTransform(target_frame, source_frame, m_node->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+            geometry_msgs::msg::TransformStamped tfstamped_gripper = m_perception->getTfBuffer().lookupTransform(target_frame, "ee_touch", m_node->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+
+            std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+            for (auto detection_array : m_perception->m_detectionPoses)
+            {
+                std::string name = detection_array.header.frame_id + "_object";
+                for (auto pose : detection_array.poses)
+                {
+                    geometry_msgs::msg::Pose objPose;
+                    m_perception->getTf(pose, objPose, tfstamped, target_frame, source_frame);
+                    objPose.orientation = tfstamped_gripper.transform.rotation;
+                    sortingPoses[name].push_back(objPose);
+                }
+            }
+
+            RCLCPP_INFO(m_node->get_logger(), "%d ", (int)sortingPoses.size());
+
+            for (const auto& [bin, poses] : sortingPoses) {
+                RCLCPP_INFO(m_node->get_logger(), "Bin: %s", bin.c_str());
+                for (const auto& pose : poses) {
+                    RCLCPP_INFO(m_node->get_logger(), "  x: %.2f y: %.2f z: %.2f",
+                        pose.position.x, pose.position.y, pose.position.z);
+                }
+            }
+
+            for (const auto& [key, pose_vector] : sortingPoses) {
+                if (!pose_vector.empty()) {
+                    RCLCPP_INFO(m_node->get_logger(), "key: %s", key.c_str());
+                    named_poses[key] = pose_vector[0];
+                }
+            }
+
+            bool validTrajectory = false;
+            validTrajectory = doTask(current_task, named_poses);
+            m_perception->m_service_map["color_sort"].srv_response.success = false;
+            return validTrajectory;
+        }
+        catch (const tf2::TransformException& ex) {
+            RCLCPP_INFO(m_node->get_logger(), "Could not transform 'base_link' to 'camera': %s", ex.what());
+            return false;
+        }
+    }
+}

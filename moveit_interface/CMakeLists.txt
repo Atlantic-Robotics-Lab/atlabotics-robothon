@@ -22,11 +22,15 @@ find_package(gripper_srv REQUIRED)
 
 # find_package(moveit_core REQUIRED)
 
-include_directories(include/moveit_interface)
+include_directories(include)
 
-add_executable(moveit_interface 
-  src/main.cpp  
+add_executable(moveit_interface
+  src/main.cpp
   src/moveit_interface.cpp
+  src/gripper_controller.cpp
+  src/perception_bridge.cpp
+  src/task_config_interpreter.cpp
+  src/task_orchestrator.cpp
 )
 
 ament_target_dependencies(moveit_interface
