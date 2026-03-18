@@ -279,17 +279,33 @@ void TaskConfigInterpreter::addStagesFromYaml(
                         off_y = stage_node["offset"][1].as<double>();
                         off_z = stage_node["offset"][2].as<double>();
                     }
-                    // Use PointStamped (position-only) so the IK solver is free to
-                    // choose a valid orientation. PoseStamped would also constrain
-                    // orientation to match the raw TF frame, which is typically not
-                    // what we want (the detected frame's z-axis rarely aligns with
-                    // the gripper approach direction and causes IK failures).
-                    geometry_msgs::msg::PointStamped target_point;
-                    target_point.header.frame_id = "base_link";
-                    target_point.point.x = it->second.position.x + off_x;
-                    target_point.point.y = it->second.position.y + off_y;
-                    target_point.point.z = it->second.position.z + off_z;
-                    stage->setGoal(target_point);
+
+                    // constrain_orientation: true  → PoseStamped (position + orientation).
+                    //   Use when the gripper must arrive in a specific orientation, e.g.
+                    //   stylus pick where subsequent align stages move in the ee frame.
+                    // constrain_orientation: false (default) → PointStamped (position only).
+                    //   IK solver is free to choose orientation — good for button presses
+                    //   where approach direction doesn't matter.
+                    bool constrain_orientation = false;
+                    if (stage_node["constrain_orientation"])
+                        constrain_orientation = stage_node["constrain_orientation"].as<bool>();
+
+                    if (constrain_orientation) {
+                        geometry_msgs::msg::PoseStamped target_pose;
+                        target_pose.header.frame_id = "base_link";
+                        target_pose.pose             = it->second;
+                        target_pose.pose.position.x += off_x;
+                        target_pose.pose.position.y += off_y;
+                        target_pose.pose.position.z += off_z;
+                        stage->setGoal(target_pose);
+                    } else {
+                        geometry_msgs::msg::PointStamped target_point;
+                        target_point.header.frame_id = "base_link";
+                        target_point.point.x = it->second.position.x + off_x;
+                        target_point.point.y = it->second.position.y + off_y;
+                        target_point.point.z = it->second.position.z + off_z;
+                        stage->setGoal(target_point);
+                    }
                     task.add(std::move(stage));
                 }
             }

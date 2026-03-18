@@ -75,8 +75,10 @@ bool TaskOrchestrator::executeStep(
 {
     m_stepParams = params;  // make params available inside execute* → doTask chain
 
-    if (type == "speed_press")    return executeSpeedPress();
+    if (type == "go_home")        return executeGoHome();
+    if (type == "press_button")   return executeSingleButtonPress();
     if (type == "press_buttons")  return executeButtonPress();
+    if (type == "retract_stylus") return executeRetractStylus();
     if (type == "grab_stylus_touch") {
         task = TaskType::GRAB_STYLUS_TOUCH;
         return executeGrabStylus(task);
@@ -192,23 +194,22 @@ bool TaskOrchestrator::executeMaze()
 
 bool TaskOrchestrator::executeDropStylus()
 {
+    // stylus_frame param selects which TF frame is the place target.
+    std::string stylus_tf = m_stepParams.count("stylus_frame") ? m_stepParams.at("stylus_frame") : "stylus";
+
     std::string current_task = "place_stylus";
 
     std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-    named_poses["stylus_pose"] = m_perception->m_transformedPoses["stylus"];
+    named_poses[stylus_tf] = m_perception->m_transformedPoses[stylus_tf];
 
-    bool validTrajectory = false;
-    validTrajectory = doTask(current_task, named_poses);
+    bool validTrajectory = doTask(current_task, named_poses);
 
     if (validTrajectory)
     {
         bool gripper_state = false;
-        m_gripper->gripperService(gripper_state);
-        current_task = "retract_stylus";
-        validTrajectory = doTask(current_task, named_poses);
-        current_task = "home_pose";
-        validTrajectory = doTask(current_task, named_poses);
-        return validTrajectory;
+        m_gripper->gripperService(gripper_state);  // release stylus
+        // Retract and home are separate task_sequence steps — not embedded here.
+        return true;
     }
     else
     {
@@ -219,7 +220,10 @@ bool TaskOrchestrator::executeDropStylus()
 
 bool TaskOrchestrator::executeGrabStylus(TaskType& taskType)
 {
+    // stylus_frame param selects which TF frame to use as the pick target.
+    std::string stylus_tf = m_stepParams.count("stylus_frame") ? m_stepParams.at("stylus_frame") : "stylus";
     std::string current_task = "";
+
     if (taskType == TaskType::GRAB_STYLUS_TOUCH)
     {
         bool gripper_state = false;
@@ -228,7 +232,7 @@ bool TaskOrchestrator::executeGrabStylus(TaskType& taskType)
         current_task = "pick_stylus";
 
         std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-        named_poses["stylus_pose"] = m_perception->m_transformedPoses["stylus"];
+        named_poses[stylus_tf] = m_perception->m_transformedPoses[stylus_tf];
 
         bool validTrajectory = false;
         validTrajectory = doTask(current_task, named_poses);
@@ -239,9 +243,8 @@ bool TaskOrchestrator::executeGrabStylus(TaskType& taskType)
             m_gripper->gripperService(gripper_state);
             sleep(1);
             RCLCPP_INFO(m_node->get_logger(), "Waiting done");
-            current_task = "retract_stylus";
-            validTrajectory = doTask(current_task, named_poses);
-            return validTrajectory;
+            // Retract and home are separate task_sequence steps — not embedded here.
+            return true;
         }
         else
         {
@@ -251,8 +254,11 @@ bool TaskOrchestrator::executeGrabStylus(TaskType& taskType)
     }
     else if (taskType == TaskType::GRAB_STYLUS_MAGNET)
     {
+        // stylus_calib_frame param selects the TF calibration frame (default: stylus_calibration).
+        std::string calib_tf = m_stepParams.count("stylus_calib_frame") ? m_stepParams.at("stylus_calib_frame") : "stylus_calibration";
+
         current_task = "retract_stylus_invert";
-        geometry_msgs::msg::TransformStamped tfstamped = m_perception->getTfBuffer().lookupTransform("base_link", "stylus_calibration", m_node->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
+        geometry_msgs::msg::TransformStamped tfstamped = m_perception->getTfBuffer().lookupTransform("base_link", calib_tf, m_node->get_clock()->now(), rclcpp::Duration::from_seconds(0.5));
         geometry_msgs::msg::Pose calibPose;
         calibPose.position.x = tfstamped.transform.translation.x;
         calibPose.position.y = tfstamped.transform.translation.y;
@@ -425,19 +431,37 @@ bool TaskOrchestrator::executeScreenMotion()
     }
 }
 
-bool TaskOrchestrator::executeSpeedPress()
+bool TaskOrchestrator::executeGoHome()
 {
-    RCLCPP_INFO(m_node->get_logger(), "executeSpeedPress");
+    // home_pose param selects the target named pose. Defaults to home_camera.
+    if (!m_stepParams.count("home_pose"))
+        m_stepParams["home_pose"] = "home_camera";
 
-    std::string current_task = "speed_test";
+    RCLCPP_INFO(m_node->get_logger(), "executeGoHome: %s", m_stepParams.at("home_pose").c_str());
+    std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+    std::string current_task = "go_home";
+    return doTask(current_task, named_poses);
+}
+
+bool TaskOrchestrator::executeRetractStylus()
+{
+    RCLCPP_INFO(m_node->get_logger(), "executeRetractStylus");
+    std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+    std::string current_task = "retract_stylus";
+    return doTask(current_task, named_poses);
+}
+
+bool TaskOrchestrator::executeSingleButtonPress()
+{
+    // Template-driven single button press.  button_frame selects the target TF frame.
+    std::string btn = m_stepParams.count("button_frame") ? m_stepParams.at("button_frame") : "blue_button";
+    RCLCPP_INFO(m_node->get_logger(), "executeSingleButtonPress: %s", btn.c_str());
 
     std::map<std::string, geometry_msgs::msg::Pose> named_poses;
-    named_poses["blue_button"] = m_perception->m_transformedPoses["blue_button"];
-    named_poses["red_button"]  = m_perception->m_transformedPoses["red_button"];
+    named_poses[btn] = m_perception->m_transformedPoses[btn];
 
-    bool validTrajectory = false;
-    validTrajectory = doTask(current_task, named_poses);
-    return validTrajectory;
+    std::string current_task = "press_button";
+    return doTask(current_task, named_poses);
 }
 
 bool TaskOrchestrator::executeButtonPress()
