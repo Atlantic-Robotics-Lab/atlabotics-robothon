@@ -164,6 +164,25 @@ void TaskConfigInterpreter::addStagesFromYaml(
     const std::map<std::string, std::string>& params)
 {
     RCLCPP_INFO(m_node->get_logger(), "addStagesFromYaml");
+
+    // ── Read per-planner defaults once so each stage gets a clean baseline ────
+    // Without this, a stage that sets vel_acc mutates the shared planner object
+    // and subsequent stages using the same planner inherit those values instead
+    // of the YAML-configured defaults.
+    double cart_vel_def = 0.2, cart_acc_def = 0.2;
+    double interp_vel_def = 0.2, interp_acc_def = 0.2;
+    if (m_config["robot"] && m_config["robot"]["planners"]) {
+        const auto& pcfg = m_config["robot"]["planners"];
+        if (pcfg["cartesian"] && pcfg["cartesian"]["default_vel_acc"]) {
+            cart_vel_def = pcfg["cartesian"]["default_vel_acc"][0].as<double>();
+            cart_acc_def = pcfg["cartesian"]["default_vel_acc"][1].as<double>();
+        }
+        if (pcfg["interpolation"] && pcfg["interpolation"]["default_vel_acc"]) {
+            interp_vel_def = pcfg["interpolation"]["default_vel_acc"][0].as<double>();
+            interp_acc_def = pcfg["interpolation"]["default_vel_acc"][1].as<double>();
+        }
+    }
+
     for (const auto& stage_node : task_config["stages"])
     {
         std::string type         = stage_node["type"].as<std::string>();
@@ -176,12 +195,30 @@ void TaskConfigInterpreter::addStagesFromYaml(
         if (stage_node["hand_frame"])
             hand_frame_name = stage_node["hand_frame"].as<std::string>();
 
+        // Guard against unknown planner names before accessing the map
+        if (!planners.count(planner_name)) {
+            RCLCPP_ERROR(m_node->get_logger(),
+                         "Unknown planner '%s' in stage '%s' — skipping",
+                         planner_name.c_str(), name.c_str());
+            continue;
+        }
         auto planner = planners.at(planner_name);
 
         if (stage_node["minmax_dist"])
         {
             min_distance = stage_node["minmax_dist"][0].as<double>();
             max_distance = stage_node["minmax_dist"][1].as<double>();
+        }
+
+        // Reset to YAML defaults first, then apply stage-level override if present.
+        // This ensures each stage starts from a known baseline regardless of what
+        // the previous stage set on the same shared planner object.
+        if (planner_name == "cartesian") {
+            planner->setMaxVelocityScalingFactor(cart_vel_def);
+            planner->setMaxAccelerationScalingFactor(cart_acc_def);
+        } else if (planner_name == "interpolation") {
+            planner->setMaxVelocityScalingFactor(interp_vel_def);
+            planner->setMaxAccelerationScalingFactor(interp_acc_def);
         }
 
         if (stage_node["vel_acc"])
@@ -242,13 +279,17 @@ void TaskConfigInterpreter::addStagesFromYaml(
                         off_y = stage_node["offset"][1].as<double>();
                         off_z = stage_node["offset"][2].as<double>();
                     }
-                    geometry_msgs::msg::PoseStamped offset_pose;
-                    offset_pose.header.frame_id = "base_link";
-                    offset_pose.pose = it->second;
-                    offset_pose.pose.position.x += off_x;
-                    offset_pose.pose.position.y += off_y;
-                    offset_pose.pose.position.z += off_z;
-                    stage->setGoal(offset_pose);
+                    // Use PointStamped (position-only) so the IK solver is free to
+                    // choose a valid orientation. PoseStamped would also constrain
+                    // orientation to match the raw TF frame, which is typically not
+                    // what we want (the detected frame's z-axis rarely aligns with
+                    // the gripper approach direction and causes IK failures).
+                    geometry_msgs::msg::PointStamped target_point;
+                    target_point.header.frame_id = "base_link";
+                    target_point.point.x = it->second.position.x + off_x;
+                    target_point.point.y = it->second.position.y + off_y;
+                    target_point.point.z = it->second.position.z + off_z;
+                    stage->setGoal(target_point);
                     task.add(std::move(stage));
                 }
             }

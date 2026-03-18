@@ -92,32 +92,43 @@ class DetectionNode(Node):
 
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-            # Define HSV ranges
-            lower_blue_glow = np.array([87, 250, 240])
-            upper_blue_glow = np.array([92, 255, 255])
-            lower_blue_idle = np.array([97, 245, 190])
-            upper_blue_idle = np.array([105, 255, 230])
+            # ── HSV ranges ────────────────────────────────────────────────────
+            # Glowing blue: pure blue LED lit up — high saturation, high value
+            lower_blue_glow = np.array([100, 150, 180])
+            upper_blue_glow = np.array([130, 255, 255])
+            # Idle blue: same hue band but noticeably dimmer / less saturated
+            lower_blue_idle = np.array([100, 80,  60])
+            upper_blue_idle = np.array([130, 200, 160])
 
-            lower_red_glow1 = np.array([5, 170, 240])
-            upper_red_glow1 = np.array([17, 220, 255])
-            lower_red_glow2 = np.array([170, 200, 200])
+            # Glowing red: bright illuminated red (hue wraps 0–10 and 170–179)
+            lower_red_glow1 = np.array([0,  150, 180])
+            upper_red_glow1 = np.array([10, 255, 255])
+            lower_red_glow2 = np.array([170, 150, 180])
             upper_red_glow2 = np.array([179, 255, 255])
 
-            lower_red_idle1 = np.array([2, 245, 155])
-            upper_red_idle1 = np.array([5, 255, 175])
-            lower_red_idle2 = np.array([170, 150, 70])
-            upper_red_idle2 = np.array([179, 210, 130])
+            # Idle red: same hue band but darker / less saturated
+            lower_red_idle1 = np.array([0,   80,  60])
+            upper_red_idle1 = np.array([10, 200, 160])
+            lower_red_idle2 = np.array([170,  80,  60])
+            upper_red_idle2 = np.array([179, 200, 160])
+            # ─────────────────────────────────────────────────────────────────
 
             # Create masks
             mask_blue_glow = cv2.inRange(hsv, lower_blue_glow, upper_blue_glow)
             mask_blue_idle = cv2.inRange(hsv, lower_blue_idle, upper_blue_idle)
-            mask_red_glow = cv2.inRange(hsv, lower_red_glow1, upper_red_glow1) | cv2.inRange(hsv, lower_red_glow2, upper_red_glow2)
-            mask_red_idle = cv2.inRange(hsv, lower_red_idle1, upper_red_idle1) | cv2.inRange(hsv, lower_red_idle2, upper_red_idle2)
+            mask_red_glow = (cv2.inRange(hsv, lower_red_glow1, upper_red_glow1) |
+                             cv2.inRange(hsv, lower_red_glow2, upper_red_glow2))
+            mask_red_idle = (cv2.inRange(hsv, lower_red_idle1, upper_red_idle1) |
+                             cv2.inRange(hsv, lower_red_idle2, upper_red_idle2))
+
+            MIN_CONTOUR_AREA = 30  # ignore stray pixels
 
             def get_largest_contour_center(mask):
                 contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if contours:
                     largest = max(contours, key=cv2.contourArea)
+                    if cv2.contourArea(largest) < MIN_CONTOUR_AREA:
+                        return None, None
                     x, y, w, h = cv2.boundingRect(largest)
                     center = (x + w // 2, y + h // 2)
                     return (x, y, w, h), center
@@ -238,25 +249,27 @@ class DetectionNode(Node):
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        lower_blue_glow = np.array([87, 250, 240])
-        upper_blue_glow = np.array([92, 255, 255])
-        lower_blue_idle = np.array([97, 245, 190])
-        upper_blue_idle = np.array([105, 255, 230])
+        lower_blue_glow = np.array([100, 150, 180])
+        upper_blue_glow = np.array([130, 255, 255])
+        lower_blue_idle = np.array([100,  80,  60])
+        upper_blue_idle = np.array([130, 200, 160])
 
-        lower_red_glow1 = np.array([5, 170, 240])
-        upper_red_glow1 = np.array([17, 220, 255])
-        lower_red_glow2 = np.array([170, 200, 200])
+        lower_red_glow1 = np.array([0,  150, 180])
+        upper_red_glow1 = np.array([10, 255, 255])
+        lower_red_glow2 = np.array([170, 150, 180])
         upper_red_glow2 = np.array([179, 255, 255])
 
-        lower_red_idle1 = np.array([2, 245, 155])
-        upper_red_idle1 = np.array([5, 255, 175])
-        lower_red_idle2 = np.array([170, 150, 70])
-        upper_red_idle2 = np.array([179, 210, 130])
+        lower_red_idle1 = np.array([0,   80,  60])
+        upper_red_idle1 = np.array([10, 200, 160])
+        lower_red_idle2 = np.array([170,  80,  60])
+        upper_red_idle2 = np.array([179, 200, 160])
 
         def get_largest_contour_center(mask):
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
                 largest = max(contours, key=cv2.contourArea)
+                if cv2.contourArea(largest) < 30:
+                    return None
                 x, y, w, h = cv2.boundingRect(largest)
                 center = (x + w // 2, y + h // 2)
                 return center

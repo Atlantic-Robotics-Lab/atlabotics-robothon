@@ -142,8 +142,11 @@ void MoveitInterface::run()
                 case InterfaceState::CHECK_TF:
                 {
                     RCLCPP_INFO(this->get_logger(), "State: CHECK_TF -> EXECUTE");
-                    m_movegroupInterface = std::make_shared<MoveGroupInterface>(this->shared_from_this(), "ur_manipulator");
-                    setParams();
+                    // Create MoveGroupInterface once; guard prevents re-creation on every loop tick
+                    if (!m_movegroupInterface) {
+                        m_movegroupInterface = std::make_shared<MoveGroupInterface>(this->shared_from_this(), "ur_manipulator");
+                        setParams();
+                    }
                     bool state = m_orchestrator->generateStaticTFPose();
                     if (state)
                     {

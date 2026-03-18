@@ -31,6 +31,7 @@ void TaskOrchestrator::reset()
     m_callTextService   = false;
     m_sequenceIndex     = 0;
     m_sequenceLoaded    = false;
+    m_stepRetryCount    = 0;
     m_stepParams.clear();
     m_perception->resetState();
 }
@@ -124,6 +125,12 @@ void TaskOrchestrator::executeTasks(TaskType& task, InterfaceState& out_state)
         RCLCPP_INFO(m_node->get_logger(), "Step [%d/%zu] '%s' completed",
                     m_sequenceIndex + 1, m_taskSequence.size(), entry.type.c_str());
         m_sequenceIndex++;
+        m_stepRetryCount = 0;
+    } else {
+        m_stepRetryCount++;
+        RCLCPP_DEBUG(m_node->get_logger(), "Step [%d/%zu] '%s' not done (attempt %d)",
+                     m_sequenceIndex + 1, m_taskSequence.size(),
+                     entry.type.c_str(), m_stepRetryCount);
     }
 }
 
@@ -325,9 +332,8 @@ bool TaskOrchestrator::executeScreenText()
             else
             {
                 current_task = "retract_align_screen";
-                bool homepose = doTask(current_task, named_poses);
+                doTask(current_task, named_poses);
                 m_callTextService = false;
-                m_taskType = TaskType::END;
                 return true;
             }
         }
@@ -409,7 +415,6 @@ bool TaskOrchestrator::executeScreenMotion()
             {
                 m_screenTaskCounter = 0;
                 m_callShapeService = false;
-                m_taskType = TaskType::END;
                 return true;
             }
         }
@@ -432,7 +437,6 @@ bool TaskOrchestrator::executeSpeedPress()
 
     bool validTrajectory = false;
     validTrajectory = doTask(current_task, named_poses);
-    m_taskType = TaskType::END;
     return validTrajectory;
 }
 
@@ -458,7 +462,6 @@ bool TaskOrchestrator::executeButtonPress()
             bool validTrajectory = false;
             validTrajectory = doTask(current_task, named_poses);
             m_perception->m_service_map["detect_button"].srv_response.success = false;
-            m_taskType = TaskType::END;
             return validTrajectory;
         }
         else

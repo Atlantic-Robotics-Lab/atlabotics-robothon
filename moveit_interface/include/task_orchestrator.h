@@ -41,7 +41,11 @@ private:
     int m_maxAttempt{2};
     bool m_callShapeService{false};
     bool m_callTextService{false};
-    TaskType m_taskType{TaskType::NONE};
+
+    // Per-step retry counter. Reset to 0 on index advance or reset().
+    // Prevents a permanently-failing step from spinning forever.
+    int m_stepRetryCount{0};
+    static constexpr int kMaxStepRetries{5};
 
     // YAML task_sequence state (Phase 3.6)
     std::vector<TaskSequenceEntry> m_taskSequence;
