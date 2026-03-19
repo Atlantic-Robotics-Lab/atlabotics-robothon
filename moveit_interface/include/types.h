@@ -9,9 +9,6 @@
 enum class InterfaceState
 {
     IDLE,
-    BOARD_DETECTION,
-    WAIT_FOR_RESPONSE,
-    CHECK_TF,
     EXECUTE,
     DONE
 };

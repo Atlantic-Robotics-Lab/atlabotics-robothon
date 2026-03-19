@@ -97,6 +97,10 @@ void MoveitInterface::setupPlanningScene()
 
 void MoveitInterface::run()
 {
+    // Initialize MoveGroupInterface once at startup so motion tasks are available immediately.
+    m_movegroupInterface = std::make_shared<MoveGroupInterface>(this->shared_from_this(), "ur_manipulator");
+    setParams();
+
     if (m_config["custom_task"].as<bool>())
     {
         m_nextTaskType = TaskType::BYOD;
@@ -111,63 +115,12 @@ void MoveitInterface::run()
             switch (m_state)
             {
                 case InterfaceState::IDLE:
-                    RCLCPP_INFO(this->get_logger(), "State: IDLE -> BOARD_DETECTION");
-                    m_state = InterfaceState::BOARD_DETECTION;
+                    RCLCPP_INFO(this->get_logger(), "State: IDLE -> EXECUTE");
+                    m_state = InterfaceState::EXECUTE;
                     break;
-
-                case InterfaceState::BOARD_DETECTION:
-                {
-                    RCLCPP_INFO(this->get_logger(), "State: BOARD_DETECTION -> WAIT_FOR_RESPONSE");
-                    if (!m_perception->m_service_map["localize_board"].srv_response.success)
-                    {
-                        m_perception->callTriggerService("localize_board");
-                    }
-                    else
-                        m_state = InterfaceState::WAIT_FOR_RESPONSE;
-                    break;
-                }
-
-                case InterfaceState::WAIT_FOR_RESPONSE:
-                {
-                    RCLCPP_INFO(this->get_logger(), "State: WAIT_FOR_RESPONSE -> CHECK_TF");
-                    if (m_perception->m_frameStatus) {
-                        RCLCPP_INFO(this->get_logger(), "Frame received. Proceeding to TF check.");
-                        m_perception->m_service_map["localize_board"].srv_response.success = false;
-                        m_perception->m_waiting_for_response = false;
-                        m_state = InterfaceState::CHECK_TF;
-                    }
-                    break;
-                }
-
-                case InterfaceState::CHECK_TF:
-                {
-                    RCLCPP_INFO(this->get_logger(), "State: CHECK_TF -> EXECUTE");
-                    // Create MoveGroupInterface once; guard prevents re-creation on every loop tick
-                    if (!m_movegroupInterface) {
-                        m_movegroupInterface = std::make_shared<MoveGroupInterface>(this->shared_from_this(), "ur_manipulator");
-                        setParams();
-                    }
-                    bool state = m_orchestrator->generateStaticTFPose();
-                    if (state)
-                    {
-                        RCLCPP_INFO(this->get_logger(), "TF Lookup successful. Ready to proceed.");
-                        bool gripper_state = true;
-                        m_gripper->gripperService(gripper_state); // Open gripper
-                        rclcpp::sleep_for(std::chrono::milliseconds(1500)); // wait for gripper to respond before sequence starts
-                        m_state = InterfaceState::EXECUTE;
-                        m_nextTaskType = TaskType::SPEED_PRESS; // start SPEED_PRESS
-                    }
-                    else
-                    {
-                        RCLCPP_INFO(this->get_logger(), "TF Lookup unsuccessful. retrying");
-                    }
-                    break;
-                }
 
                 case InterfaceState::EXECUTE:
                 {
-                    RCLCPP_WARN(this->get_logger(), "State: EXECUTE -> DONE");
-                    m_perception->m_waiting_for_response = false; // To ensure all states are called freshly
                     m_orchestrator->executeTasks(m_nextTaskType, m_state);
                     break;
                 }

@@ -83,41 +83,43 @@ custom_task: false
 task_sequence:
   # ── Active sequence ──────────────────────────────────────────────────────────
   # Stylus pick (touch) then place:
-  - type: go_home
-    params:
-      home_pose: home_camera_vertical
-  - type: open_gripper            # narrow fingers before approaching tube
-  - type: grab_stylus_touch
-    params:
-      stylus_frame: stylus
-  - type: close_gripper             # spread fingers to grip the tube
-  - type: retract_stylus
+  - type: go_home                  # robot homes BEFORE localization
+  - type: localize_board           # triggers perception, waits for TF frames
+  # - type: go_home
+  #   params:
+  #     home_pose: home_camera_vertical
+  # - type: open_gripper            # narrow fingers before approaching tube
+  # - type: grab_stylus_touch
+  #   params:
+  #     stylus_frame: stylus
+  # - type: close_gripper             # spread fingers to grip the tube
+  # - type: retract_stylus
 
-  - type: go_home
-    params:
-      home_pose: home_camera_vertical
+  # - type: go_home
+  #   params:
+  #     home_pose: home_camera_vertical
 
-  - type: drop_stylus
-    params:
-      stylus_frame: stylus
-  - type: open_gripper            # release tube by closing fingers
-  - type: retract_stylus
-  - type: go_home
+  # - type: drop_stylus
+  #   params:
+  #     stylus_frame: stylus
+  # - type: open_gripper            # release tube by closing fingers
+  # - type: retract_stylus
+  # - type: go_home
 
   # ── Other sequences (uncomment to use) ──────────────────────────────────────
 
   # Buttons — press both, no home between them:
-  # - type: go_home
-  #   params:
-  #     home_pose: home_camera_vertical
-  # - type: close_gripper
-  # - type: press_button
-  #   params:
-  #     button_frame: blue_button
-  # - type: press_button
-  #   params:
-  #     button_frame: red_button
-  # - type: go_home
+  - type: go_home
+    params:
+      home_pose: home_camera_vertical
+  - type: close_gripper
+  - type: press_button
+    params:
+      button_frame: blue_button
+  - type: press_button
+    params:
+      button_frame: red_button
+  - type: go_home
 
   # Stylus + screen tasks:
   # - type: go_home

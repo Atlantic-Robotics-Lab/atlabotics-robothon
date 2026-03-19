@@ -75,6 +75,7 @@ bool TaskOrchestrator::executeStep(
 {
     m_stepParams = params;  // make params available inside execute* → doTask chain
 
+    if (type == "localize_board") return executeLocalizeBoard();
     if (type == "go_home")        return executeGoHome();
     if (type == "press_button")   return executeSingleButtonPress();
     if (type == "press_buttons")  return executeButtonPress();
@@ -480,6 +481,38 @@ bool TaskOrchestrator::executeGenericMotionTask(const std::string& task_name)
 }
 
 // ─── existing execute* implementations ────────────────────────────────────────
+
+// ─── executeLocalizeBoard ─────────────────────────────────────────────────────
+// Replicates the former BOARD_DETECTION→WAIT_FOR_RESPONSE→CHECK_TF state
+// machine as a single retryable sequence step.  Returns false on each call
+// until the board is fully localized (service responded + frame received + TF
+// lookup succeeded), then returns true exactly once.
+bool TaskOrchestrator::executeLocalizeBoard()
+{
+    // Phase 1: trigger the localize_board service; no-op if already waiting.
+    if (!m_perception->m_service_map["localize_board"].srv_response.success) {
+        m_perception->callTriggerService("localize_board");
+        return false;
+    }
+
+    // Phase 2: wait for the frame_status topic to confirm TF frames are ready.
+    if (!m_perception->m_frameStatus) {
+        RCLCPP_INFO(m_node->get_logger(), "executeLocalizeBoard: waiting for frame_status");
+        return false;
+    }
+
+    // Phase 3: reset service state then snapshot all board TF poses.
+    m_perception->m_service_map["localize_board"].srv_response.success = false;
+    m_perception->m_waiting_for_response = false;
+
+    bool ok = m_perception->generateStaticTFPose();
+    if (ok) {
+        RCLCPP_INFO(m_node->get_logger(), "executeLocalizeBoard: board localized successfully");
+    } else {
+        RCLCPP_WARN(m_node->get_logger(), "executeLocalizeBoard: TF lookup failed, will retry");
+    }
+    return ok;
+}
 
 bool TaskOrchestrator::executeGoHome()
 {

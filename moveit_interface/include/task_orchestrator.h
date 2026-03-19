@@ -63,6 +63,7 @@ private:
     // Delegates to m_interpreter->doTask, forwarding m_stepParams for template resolution
     bool doTask(std::string& task_name, std::map<std::string, geometry_msgs::msg::Pose>& poses);
 
+    bool executeLocalizeBoard();       // triggers perception service, waits for frame, runs TF lookup
     bool executeGoHome();              // moves to {{home_pose}} named pose (default: home_camera)
     bool executeRetractStylus();       // lifts stylus straight up
     bool executeSingleButtonPress();   // template-driven: reads button_frame from m_stepParams
