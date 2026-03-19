@@ -92,9 +92,15 @@ bool TaskOrchestrator::executeStep(
     if (type == "maze")         return executeMaze();
     if (type == "drop_stylus")  return executeDropStylus();
 
-    RCLCPP_ERROR(m_node->get_logger(), "Unknown task_sequence type: '%s' — skipping",
-                 type.c_str());
-    return true;  // unknown step treated as done to avoid infinite retry
+    // ── Phase 5: gripper sequence steps ──────────────────────────────────────
+    if (type == "open_gripper")  return executeOpenGripper();
+    if (type == "close_gripper") return executeCloseGripper();
+
+    // ── Phase 5: generic fallthrough ─────────────────────────────────────────
+    // Any type not handled above is looked up in tasks: YAML.
+    // Works for pure-motion task templates (no gripper/wait stages).
+    // To add a new task: define it in tasks: YAML — no C++ changes needed.
+    return executeGenericMotionTask(type);
 }
 
 // ─── executeTasks (Phase 3.6) ─────────────────────────────────────────────────
@@ -204,18 +210,10 @@ bool TaskOrchestrator::executeDropStylus()
 
     bool validTrajectory = doTask(current_task, named_poses);
 
-    if (validTrajectory)
-    {
-        bool gripper_state = false;
-        m_gripper->gripperService(gripper_state);  // release stylus
-        // Retract and home are separate task_sequence steps — not embedded here.
-        return true;
-    }
-    else
-    {
+    if (!validTrajectory)
         RCLCPP_INFO(m_node->get_logger(), "Could not reach stylus pose");
-        return false;
-    }
+    // Gripper open/close are separate task_sequence steps — not embedded here.
+    return validTrajectory;
 }
 
 bool TaskOrchestrator::executeGrabStylus(TaskType& taskType)
@@ -226,31 +224,17 @@ bool TaskOrchestrator::executeGrabStylus(TaskType& taskType)
 
     if (taskType == TaskType::GRAB_STYLUS_TOUCH)
     {
-        bool gripper_state = false;
-        m_gripper->gripperService(gripper_state); // Close gripper
-
         current_task = "pick_stylus";
 
         std::map<std::string, geometry_msgs::msg::Pose> named_poses;
         named_poses[stylus_tf] = m_perception->m_transformedPoses[stylus_tf];
 
-        bool validTrajectory = false;
-        validTrajectory = doTask(current_task, named_poses);
+        bool validTrajectory = doTask(current_task, named_poses);
 
-        if (validTrajectory)
-        {
-            gripper_state = true;
-            m_gripper->gripperService(gripper_state);
-            sleep(1);
-            RCLCPP_INFO(m_node->get_logger(), "Waiting done");
-            // Retract and home are separate task_sequence steps — not embedded here.
-            return true;
-        }
-        else
-        {
+        if (!validTrajectory)
             RCLCPP_INFO(m_node->get_logger(), "Could not reach stylus pose");
-            return false;
-        }
+        // Gripper open/close are separate task_sequence steps — not embedded here.
+        return validTrajectory;
     }
     else if (taskType == TaskType::GRAB_STYLUS_MAGNET)
     {
@@ -430,6 +414,72 @@ bool TaskOrchestrator::executeScreenMotion()
         }
     }
 }
+
+// ─── Phase 5: gripper sequence steps ──────────────────────────────────────────
+
+bool TaskOrchestrator::executeOpenGripper()
+{
+    RCLCPP_INFO(m_node->get_logger(), "executeOpenGripper");
+    bool state = true;
+    m_gripper->gripperService(state);
+    // gripperService is async — sleep long enough for the gripper to physically move
+    // before the next sequence step starts planning/executing.
+    rclcpp::sleep_for(std::chrono::milliseconds(1000));
+    return true;
+}
+
+bool TaskOrchestrator::executeCloseGripper()
+{
+    RCLCPP_INFO(m_node->get_logger(), "executeCloseGripper");
+    bool state = false;
+    m_gripper->gripperService(state);
+    rclcpp::sleep_for(std::chrono::milliseconds(1000));
+    return true;
+}
+
+// ─── Phase 5: generic pure-motion task driver ─────────────────────────────────
+// Looks up task_name in tasks: YAML. Collects all tf_frame targets from the task's
+// stages (resolving template vars from m_stepParams), then calls doTask.
+// Works for any task template that contains only move_to / move_relative / move_to_path
+// stages — no gripper or wait stages.
+bool TaskOrchestrator::executeGenericMotionTask(const std::string& task_name)
+{
+    const YAML::Node& task_node = m_interpreter->config()["tasks"][task_name];
+    if (!task_node) {
+        RCLCPP_ERROR(m_node->get_logger(),
+                     "Unknown task type '%s' — not found in tasks: config, skipping",
+                     task_name.c_str());
+        return true;  // skip to avoid infinite retry
+    }
+
+    RCLCPP_INFO(m_node->get_logger(), "executeGenericMotionTask: %s", task_name.c_str());
+
+    // Walk the stage list and collect every tf_frame target into named_poses.
+    std::map<std::string, geometry_msgs::msg::Pose> named_poses;
+    if (task_node["stages"]) {
+        for (const auto& stage : task_node["stages"]) {
+            if (!stage["target_type"]) continue;
+            if (stage["target_type"].as<std::string>() != "tf_frame") continue;
+            if (!stage["target"]) continue;
+
+            std::string target = TaskConfigInterpreter::resolveTemplateVar(
+                stage["target"].as<std::string>(), m_stepParams);
+
+            if (m_perception->m_transformedPoses.count(target)) {
+                named_poses[target] = m_perception->m_transformedPoses[target];
+            } else {
+                RCLCPP_WARN(m_node->get_logger(),
+                            "executeGenericMotionTask '%s': TF frame '%s' not in pose registry",
+                            task_name.c_str(), target.c_str());
+            }
+        }
+    }
+
+    std::string name_copy = task_name;
+    return doTask(name_copy, named_poses);
+}
+
+// ─── existing execute* implementations ────────────────────────────────────────
 
 bool TaskOrchestrator::executeGoHome()
 {

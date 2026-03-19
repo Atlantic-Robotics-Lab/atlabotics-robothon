@@ -37,6 +37,11 @@ public:
 
     const YAML::Node& config() const { return m_config; }
 
+    // Replaces {{key}} with params[key] in s. Returns s unchanged if no placeholders. (Phase 4.1)
+    // Public so TaskOrchestrator can resolve template vars when collecting stage poses.
+    static std::string resolveTemplateVar(const std::string& s,
+                                          const std::map<std::string, std::string>& params);
+
 private:
     rclcpp::Node* m_node;
     YAML::Node m_config;
@@ -49,8 +54,4 @@ private:
         const std::string& group_name,
         const std::string& hand_frame,
         const std::map<std::string, std::string>& params = {});
-
-    // Replaces {{key}} with params[key] in s. Returns s unchanged if no placeholders. (Phase 4.1)
-    static std::string resolveTemplateVar(const std::string& s,
-                                          const std::map<std::string, std::string>& params);
 };

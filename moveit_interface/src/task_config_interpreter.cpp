@@ -185,8 +185,19 @@ void TaskConfigInterpreter::addStagesFromYaml(
 
     for (const auto& stage_node : task_config["stages"])
     {
-        std::string type         = stage_node["type"].as<std::string>();
-        std::string name         = stage_node["name"].as<std::string>();
+        std::string type = stage_node["type"].as<std::string>();
+        std::string name = stage_node["name"].as<std::string>();
+
+        // ── Non-motion stage types (Phase 3.2 / Phase 5) ─────────────────────
+        // gripper and wait stages are handled by TaskOrchestrator, not MTC.
+        // Skip them here so we don't crash on the missing planner field.
+        if (type == "gripper" || type == "wait") {
+            RCLCPP_INFO(m_node->get_logger(),
+                        "Stage '%s' (type: %s) handled by orchestrator — skipped in MTC task",
+                        name.c_str(), type.c_str());
+            continue;
+        }
+
         std::string planner_name = stage_node["planner"].as<std::string>();
         double min_distance = 0.1;
         double max_distance = 0.1;

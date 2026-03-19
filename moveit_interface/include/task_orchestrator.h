@@ -73,4 +73,14 @@ private:
     bool executeDropStylus();
     bool executeGrabStylus(TaskType& taskType);
     bool executeCustomTask();
+
+    // ── Phase 5: generic task execution ──────────────────────────────────────
+    // Gripper sequence steps — no motion, just gripper open/close.
+    bool executeOpenGripper();
+    bool executeCloseGripper();
+
+    // Generic pure-motion task driver (Phase 5).
+    // Looks up task_name in tasks: YAML, collects tf_frame poses from m_transformedPoses,
+    // and calls doTask.  Works for any task that has no gripper/wait stages.
+    bool executeGenericMotionTask(const std::string& task_name);
 };

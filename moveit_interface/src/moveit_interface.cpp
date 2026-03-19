@@ -153,6 +153,7 @@ void MoveitInterface::run()
                         RCLCPP_INFO(this->get_logger(), "TF Lookup successful. Ready to proceed.");
                         bool gripper_state = true;
                         m_gripper->gripperService(gripper_state); // Open gripper
+                        rclcpp::sleep_for(std::chrono::milliseconds(1500)); // wait for gripper to respond before sequence starts
                         m_state = InterfaceState::EXECUTE;
                         m_nextTaskType = TaskType::SPEED_PRESS; // start SPEED_PRESS
                     }

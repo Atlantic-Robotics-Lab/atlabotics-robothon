@@ -1,9 +1,8 @@
-# ─── Robot Configuration (Phase 3.7) ─────────────────────────────────────────
-# Central place for all robot-level settings.
+# ─── Robot Configuration ──────────────────────────────────────────────────────
 robot:
   arm_group: "ur_manipulator"
 
-  # End-effector registry. Tasks reference these by name via end_effector: field.
+  # End-effector registry. Referenced by end_effector: in tasks:.
   end_effectors:
     gripper:
       frame_id: "ee_gripper"
@@ -12,7 +11,7 @@ robot:
     magnet:
       frame_id: "ee_magnet"
 
-  # Planner defaults. Per-stage vel_acc overrides these.
+  # Planner defaults. Per-stage vel_acc: overrides these.
   planners:
     cartesian:
       step_size: 0.01
@@ -22,12 +21,12 @@ robot:
     sampling:
       default_vel_acc: [0.2, 0.2]
 
-  # Gripper profiles used by GripperController (Phase 3.7)
+  # Gripper profiles used by GripperController.
   gripper:
-    open:  { position: 255, speed: 255, force: 128 }
-    close: { position: 0,   speed: 64,  force: 1   }
+    open:  { position: 0,   speed: 255, force: 128 }
+    close: { position: 255, speed: 64,  force: 1   }
 
-# ─── MoveGroup Params (kept for setParams() compatibility) ────────────────────
+# ─── MoveGroup Params ─────────────────────────────────────────────────────────
 move_group:
   planner_id: "TRRT"
   planning_time: 10.0
@@ -43,85 +42,149 @@ planning: true
 custom_task: false
 
 # ─── Task Sequence ────────────────────────────────────────────────────────────
-# Drives execution order.  Every task template is now ATOMIC — no embedded home
-# moves.  Use go_home steps explicitly to control when the robot returns home.
-# This lets you put a home between any two steps, or chain presses back-to-back.
 #
-# Step types:
-#   go_home          params: home_pose (default: home_camera)
-#   press_button     params: button_frame (required)
-#   press_buttons    perception-driven, no params
-#   grab_stylus_touch  params: stylus_frame (default: stylus)
-#   grab_stylus_magnet params: stylus_frame (default: stylus), stylus_calib_frame (default: stylus_calibration)
-#   retract_stylus   no params
-#   drop_stylus      params: stylus_frame (default: stylus)
-#   screen_shape     no params
-#   screen_text      no params
-#   maze             no params
+# WHAT TO RUN — ordered list of steps.
+# Each step has a type: that resolves as follows:
+#
+#   open_gripper / close_gripper
+#     → calls gripper service directly, no motion planning
+#
+#   press_buttons
+#     → perception-driven C++: detects button positions at runtime
+#
+#   <anything else>
+#     → looks up tasks.<type> below and executes the motion template
+#       (pass params: to fill in {{variable}} placeholders in the template)
+#
+# Built-in Robothon step types (have dedicated C++ logic + a tasks: entry):
+#   go_home              params: home_pose (default: home_camera)
+#   press_button         params: button_frame (required)
+#   grab_stylus_touch    params: stylus_frame (default: stylus)
+#   grab_stylus_magnet   params: stylus_frame, stylus_calib_frame
+#   retract_stylus       no params
+#   drop_stylus          params: stylus_frame (default: stylus)
+#   screen_shape         no params
+#   screen_text          no params
+#   maze                 no params
+#
+# Generic step types (pure YAML, zero C++ needed):
+#   approach_pick        params: pick_frame
+#   descend_pick         no params
+#   lift_vertical        no params
+#   approach_place       params: place_frame
+#   descend_place        no params
+#   push_object          params: push_frame
+#   tap_point            params: tap_frame
+#   long_press_contact   params: press_frame
+#   release_press        no params
+#   swipe                params: swipe_start_frame, swipe_end_frame
+#   (or any new task you define in tasks: below)
+#
 task_sequence:
-  # ── Speed test: press both buttons in sequence (no home in between = fastest) ──
+  # ── Active sequence ──────────────────────────────────────────────────────────
+  # Stylus pick (touch) then place:
   - type: go_home
     params:
       home_pose: home_camera_vertical
-
-  - type: press_button
-    params:
-      button_frame: blue_button      # change to red_button to press red first
-
-  - type: press_button
-    params:
-      button_frame: red_button
-
-  - type: go_home                    # home_pose defaults to home_camera
-
-  # ── Perception-driven button press (detect_button service) ──────────────────
-  # - type: press_buttons
-  # - type: go_home
-
-  # ── Stylus pick (touch), screen tasks, then place ───────────────────────────
-  - type: go_home
-    params:
-      home_pose: home_camera_vertical
+  - type: open_gripper            # narrow fingers before approaching tube
   - type: grab_stylus_touch
     params:
       stylus_frame: stylus
+  - type: close_gripper             # spread fingers to grip the tube
   - type: retract_stylus
-  - type: go_home
-    params:
-      home_pose: home_camera_touch
-  # - type: screen_shape
-  # - type: screen_text
+
   - type: go_home
     params:
       home_pose: home_camera_vertical
+
   - type: drop_stylus
     params:
       stylus_frame: stylus
+  - type: open_gripper            # release tube by closing fingers
   - type: retract_stylus
   - type: go_home
 
-  # ── Maze ────────────────────────────────────────────────────────────────────
+  # ── Other sequences (uncomment to use) ──────────────────────────────────────
+
+  # Buttons — press both, no home between them:
+  # - type: go_home
+  #   params:
+  #     home_pose: home_camera_vertical
+  # - type: close_gripper
+  # - type: press_button
+  #   params:
+  #     button_frame: blue_button
+  # - type: press_button
+  #   params:
+  #     button_frame: red_button
+  # - type: go_home
+
+  # Stylus + screen tasks:
+  # - type: go_home
+  #   params:
+  #     home_pose: home_camera_touch
+  # - type: screen_shape
+  # - type: screen_text
+  # - type: go_home
+  #   params:
+  #     home_pose: home_camera_vertical
+  # - type: drop_stylus
+  #   params:
+  #     stylus_frame: stylus
+  # - type: retract_stylus
+  # - type: go_home
+
+  # Maze:
   # - type: maze
   # - type: go_home
 
-# ─── Task Templates ───────────────────────────────────────────────────────────
-# All templates are ATOMIC: they do exactly one action, no home moves.
+  # Generic pick-and-place (swap TF frame names for your object):
+  # - type: open_gripper
+  # - type: go_home
+  # - type: approach_pick
+  #   params:
+  #     pick_frame: object_tf
+  # - type: descend_pick
+  # - type: close_gripper
+  # - type: lift_vertical
+  # - type: go_home
+  # - type: approach_place
+  #   params:
+  #     place_frame: bin_tf
+  # - type: descend_place
+  # - type: open_gripper
+  # - type: lift_vertical
+  # - type: go_home
+
+# ─── Task Templates (motion library) ──────────────────────────────────────────
+#
+# HOW EACH STEP MOVES — looked up by name from task_sequence.
+# Each template is ATOMIC: one action, no embedded home moves.
 # Add go_home steps in task_sequence to control when the robot returns home.
 #
-# Stage field reference:
-#   type:         move_to | move_relative | move_to_path
-#   target_type:  named_pose (SRDF joint state) | tf_frame (runtime pose lookup)
-#   end_effector: references robot.end_effectors.<name>.frame_id
-#   frame:        reference frame for move_relative direction
-#   vel_acc:      [velocity_scale, acceleration_scale] overrides planner defaults
-#   offset:       [x, y, z] added to pose for move_to tf_frame targets
-#   minmax_dist:  [min, max] distance for move_relative
-#   target:       may contain {{variable}} placeholders resolved from task_sequence params
+# To add a new task (zero C++ required for pure-motion tasks):
+#   1. Define it here with end_effector: and stages:.
+#   2. Reference it in task_sequence with type: <your_task_name>.
+#   3. Pass TF frame names as params: <param>: <tf_frame>.
+#
+# Stage fields:
+#   type:               move_to | move_relative | move_to_path
+#   target_type:        named_pose (SRDF joint state) | tf_frame (runtime lookup)
+#   end_effector:       one of robot.end_effectors (gripper | touch_stylus | magnet)
+#   planner:            cartesian | interpolation | sampling
+#   frame:              reference frame for move_relative direction
+#   vel_acc:            [vel_scale, acc_scale]  overrides planner defaults
+#   offset:             [x, y, z]  added to pose for tf_frame targets
+#   minmax_dist:        [min, max]  distance for move_relative
+#   constrain_orientation: true  lock gripper orientation to match frame
+#   target:             pose name or TF frame; may use {{variable}} placeholders
+#
 tasks:
 
-  # ── go_home ──────────────────────────────────────────────────────────────────
-  # Moves to any named pose.  home_pose param selects the target (default: home_camera).
-  # Examples: home_camera | home_camera_vertical | home_camera_touch | home_camera_magnet
+  # ── Navigation ───────────────────────────────────────────────────────────────
+
+  # go_home: move to any SRDF named pose.
+  # home_pose examples: home_camera | home_camera_vertical | home_camera_touch | home_camera_magnet
   go_home:
     end_effector: gripper
     stages:
@@ -130,11 +193,12 @@ tasks:
         target_type: named_pose
         planner: interpolation
         target: "{{home_pose}}"
-        vel_acc: [1.0, 1.0]
+        vel_acc: [0.5, 0.5]
 
-  # ── press_button ─────────────────────────────────────────────────────────────
-  # ATOMIC: approach → press → retract.  No home move.
-  # button_frame param selects which TF frame to press.
+  # ── Button tasks ─────────────────────────────────────────────────────────────
+
+  # press_button: approach → press → retract.
+  # button_frame param selects the TF frame to press.
   press_button:
     end_effector: gripper
     stages:
@@ -144,14 +208,12 @@ tasks:
         planner: interpolation
         target: "{{button_frame}}"
         offset: [0.0, 0.0, 0.1]
-
       - name: press
         type: move_relative
         planner: cartesian
         frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.105, 0.105]
-
       - name: retract
         type: move_relative
         planner: cartesian
@@ -159,8 +221,7 @@ tasks:
         direction: [0.0, 0.0, 1.0]
         minmax_dist: [0.1, 0.1]
 
-  # ── press_blue_button / press_red_button ─────────────────────────────────────
-  # Used by the perception-driven executeButtonPress().  Also ATOMIC.
+  # Internal templates used by the perception-driven executeButtonPress().
   press_blue_button:
     end_effector: gripper
     stages:
@@ -170,14 +231,12 @@ tasks:
         planner: interpolation
         target: blue_button
         offset: [0.0, 0.0, 0.1]
-
       - name: press_blue
         type: move_relative
         planner: cartesian
         frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.105, 0.105]
-
       - name: retract_blue
         type: move_relative
         planner: cartesian
@@ -194,14 +253,12 @@ tasks:
         planner: interpolation
         target: red_button
         offset: [0.0, 0.0, 0.1]
-
       - name: press_red
         type: move_relative
         planner: cartesian
         frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.105, 0.105]
-
       - name: retract_red
         type: move_relative
         planner: cartesian
@@ -209,9 +266,10 @@ tasks:
         direction: [0.0, 0.0, 1.0]
         minmax_dist: [0.1, 0.1]
 
-  # ── pick_stylus ──────────────────────────────────────────────────────────────
-  # ATOMIC: approach → align → descend to grab.  No home move.
-  # stylus_frame param selects which TF frame is the pick target.
+  # ── Stylus tasks ─────────────────────────────────────────────────────────────
+
+  # pick_stylus: approach → align → descend to grab.
+  # Use with close_gripper before and open_gripper after in task_sequence.
   pick_stylus:
     end_effector: gripper
     stages:
@@ -221,9 +279,8 @@ tasks:
         planner: interpolation
         target: "{{stylus_frame}}"
         offset: [0.0, 0.0, 0.1]
-        constrain_orientation: true   # gripper must match stylus frame orientation for align/grab
+        constrain_orientation: true
         vel_acc: [0.8, 0.8]
-
       - name: align_stylus
         type: move_relative
         planner: cartesian
@@ -231,7 +288,6 @@ tasks:
         direction: [-1.0, 0.0, 0.0]
         minmax_dist: [0.003, 0.003]
         vel_acc: [0.1, 0.1]
-
       - name: grab_stylus
         type: move_relative
         planner: cartesian
@@ -239,8 +295,7 @@ tasks:
         direction: [0.0, 0.0, -1]
         minmax_dist: [0.103, 0.103]
 
-  # ── retract_stylus ───────────────────────────────────────────────────────────
-  # ATOMIC: lift straight up.  Follow with go_home to reach a named pose.
+  # retract_stylus: lift straight up. Follow with go_home to reach a named pose.
   retract_stylus:
     end_effector: gripper
     stages:
@@ -251,9 +306,8 @@ tasks:
         direction: [0.0, 0.0, 1.0]
         minmax_dist: [0.1, 0.1]
 
-  # ── place_stylus ─────────────────────────────────────────────────────────────
-  # ATOMIC: approach holder → align → descend to place.  No home move.
-  # stylus_frame param selects which TF frame is the place target.
+  # place_stylus: approach holder → align → descend to place.
+  # Use with close_gripper after in task_sequence to release the tube.
   place_stylus:
     end_effector: gripper
     stages:
@@ -263,8 +317,7 @@ tasks:
         planner: interpolation
         target: "{{stylus_frame}}"
         offset: [0.0, 0.0, 0.1]
-        constrain_orientation: true   # gripper must match stylus frame orientation for align/release
-
+        constrain_orientation: true
       - name: align_stylus_centre
         type: move_relative
         planner: cartesian
@@ -272,7 +325,6 @@ tasks:
         direction: [0.0, 1.0, 0.0]
         minmax_dist: [0.007, 0.007]
         vel_acc: [0.2, 0.2]
-
       - name: align_stylus
         type: move_relative
         planner: cartesian
@@ -280,7 +332,6 @@ tasks:
         direction: [-1.0, 0.0, 0.0]
         minmax_dist: [0.01, 0.01]
         vel_acc: [0.2, 0.2]
-
       - name: release_stylus
         type: move_relative
         planner: cartesian
@@ -288,8 +339,9 @@ tasks:
         direction: [0.0, 0.0, -1]
         minmax_dist: [0.095, 0.095]
 
-  # ── screen_approach / screen_draw / screen_text ──────────────────────────────
-  # Used internally by executeScreenMotion() / executeScreenText().
+  # ── Screen tasks ─────────────────────────────────────────────────────────────
+  # Used internally by executeScreenMotion() and executeScreenText().
+
   screen_approach:
     end_effector: touch_stylus
     stages:
@@ -300,7 +352,6 @@ tasks:
         target: screen_align_pose
         offset: [0.0, 0.0, 0.0]
         vel_acc: [0.5, 0.5]
-
       - name: screen_approach
         type: move_to
         target_type: tf_frame
@@ -317,14 +368,12 @@ tasks:
         planner: interpolation
         target: background
         offset: [0.0, 0.0, 0.03]
-
       - name: screen_draw_poses
         type: move_to_path
         planner: interpolation
         target: screen_draw_poses
         offset: [0.0, 0.0, -0.005]
         vel_acc: [0.05, 0.05]
-
       - name: retract_screen
         type: move_to
         target_type: tf_frame
@@ -342,7 +391,6 @@ tasks:
         target: screen_text_poses
         offset: [0.0, 0.0, -0.007]
         vel_acc: [0.05, 0.05]
-
       - name: retract_screen
         type: move_to
         target_type: tf_frame
@@ -361,7 +409,6 @@ tasks:
         direction: [0.0, 0.0, 1.0]
         minmax_dist: [0.1, 0.1]
         vel_acc: [0.5, 0.5]
-
       - name: move_home_magnet
         type: move_to
         target_type: named_pose
@@ -369,7 +416,9 @@ tasks:
         target: home_camera_magnet
         vel_acc: [0.8, 0.8]
 
-  # ── solve_maze / retract_maze ─────────────────────────────────────────────────
+  # ── Maze tasks ───────────────────────────────────────────────────────────────
+  # Used internally by executeMaze().
+
   solve_maze:
     end_effector: magnet
     stages:
@@ -380,7 +429,6 @@ tasks:
         target: screen_align_pose
         offset: [0.0, 0.0, 0.0]
         vel_acc: [0.5, 0.5]
-
       - name: maze_path_poses
         type: move_to_path
         planner: interpolation
@@ -399,7 +447,7 @@ tasks:
         minmax_dist: [0.1, 0.1]
         vel_acc: [0.8, 0.8]
 
-  # ── retract_stylus_invert (magnet grab calibration) ───────────────────────────
+  # Used by grab_stylus_magnet calibration step.
   retract_stylus_invert:
     end_effector: touch_stylus
     stages:
@@ -409,7 +457,6 @@ tasks:
         planner: interpolation
         target: stylus_calibration
         vel_acc: [0.2, 0.2]
-
       - name: stylus_calibration_precise
         type: move_to
         target_type: tf_frame
@@ -417,24 +464,216 @@ tasks:
         target: stylus_calibration_precise
         offset: [0.0, 0.0, 0.1]
         vel_acc: [0.2, 0.2]
-
       - name: press_stylus_calib
         type: move_relative
         planner: cartesian
         frame: world
         direction: [0.0, 0.0, -1.0]
         minmax_dist: [0.10, 0.10]
-
       - name: stylus_calibration_return
         type: move_to
         target_type: named_pose
         planner: interpolation
         target: stylus_calibration
         vel_acc: [0.2, 0.2]
-
       - name: move_home_touch
         type: move_to
         target_type: named_pose
         planner: interpolation
         target: home_camera_touch
         vel_acc: [0.2, 0.2]
+
+  # ── Generic pick-and-place building blocks ────────────────────────────────────
+  # Combine these in task_sequence with open_gripper / close_gripper steps.
+
+  # approach_pick: move above pick frame (orientation-constrained).
+  # pick_frame: TF frame of object to pick.
+  approach_pick:
+    end_effector: gripper
+    stages:
+      - name: approach_pick_pose
+        type: move_to
+        target_type: tf_frame
+        planner: interpolation
+        target: "{{pick_frame}}"
+        offset: [0.0, 0.0, 0.1]
+        constrain_orientation: true
+        vel_acc: [0.6, 0.6]
+
+  # descend_pick: descend straight down to grasp depth.
+  # Follow with close_gripper in task_sequence.
+  descend_pick:
+    end_effector: gripper
+    stages:
+      - name: descend_to_pick
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, -1.0]
+        minmax_dist: [0.1, 0.1]
+        vel_acc: [0.3, 0.3]
+
+  # lift_vertical: lift straight up. Use after close_gripper (pick) or open_gripper (place).
+  lift_vertical:
+    end_effector: gripper
+    stages:
+      - name: lift_up
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.12, 0.12]
+        vel_acc: [0.4, 0.4]
+
+  # approach_place: move above place frame.
+  # place_frame: TF frame of place target (bin, holder, etc.).
+  approach_place:
+    end_effector: gripper
+    stages:
+      - name: approach_place_pose
+        type: move_to
+        target_type: tf_frame
+        planner: interpolation
+        target: "{{place_frame}}"
+        offset: [0.0, 0.0, 0.1]
+        vel_acc: [0.6, 0.6]
+
+  # descend_place: descend to place depth.
+  # Follow with open_gripper in task_sequence.
+  descend_place:
+    end_effector: gripper
+    stages:
+      - name: descend_to_place
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, -1.0]
+        minmax_dist: [0.08, 0.08]
+        vel_acc: [0.2, 0.2]
+
+  # ── Push / contact tasks ──────────────────────────────────────────────────────
+
+  # push_object: approach overhead → contact → push along +X → retract.
+  # push_frame: TF frame of object to push.
+  # Edit push_forward direction/distance to change push axis.
+  push_object:
+    end_effector: gripper
+    stages:
+      - name: approach_push
+        type: move_to
+        target_type: tf_frame
+        planner: interpolation
+        target: "{{push_frame}}"
+        offset: [0.0, 0.0, 0.1]
+      - name: contact_push
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, -1.0]
+        minmax_dist: [0.1, 0.1]
+        vel_acc: [0.1, 0.1]
+      - name: push_forward
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [1.0, 0.0, 0.0]    # change to [0,1,0] for Y-axis push
+        minmax_dist: [0.05, 0.05]
+        vel_acc: [0.1, 0.1]
+      - name: retract_push
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.1, 0.1]
+
+  # tap_point: approach → tap down → lift. Single contact, no gripper needed.
+  # tap_frame: TF frame of point to tap.
+  tap_point:
+    end_effector: gripper
+    stages:
+      - name: approach_tap
+        type: move_to
+        target_type: tf_frame
+        planner: interpolation
+        target: "{{tap_frame}}"
+        offset: [0.0, 0.0, 0.08]
+      - name: tap_down
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, -1.0]
+        minmax_dist: [0.085, 0.085]
+        vel_acc: [0.3, 0.3]
+      - name: tap_lift
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.085, 0.085]
+        vel_acc: [0.3, 0.3]
+
+  # long_press_contact: approach → press to contact. Does NOT retract.
+  # Pair with release_press in task_sequence.
+  # press_frame: TF frame of point to press.
+  long_press_contact:
+    end_effector: gripper
+    stages:
+      - name: approach_press
+        type: move_to
+        target_type: tf_frame
+        planner: interpolation
+        target: "{{press_frame}}"
+        offset: [0.0, 0.0, 0.1]
+      - name: press_contact
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, -1.0]
+        minmax_dist: [0.105, 0.105]
+        vel_acc: [0.1, 0.1]
+
+  # release_press: retract straight up. Complements long_press_contact.
+  release_press:
+    end_effector: gripper
+    stages:
+      - name: retract_press
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.1, 0.1]
+
+  # ── Swipe / drag tasks ────────────────────────────────────────────────────────
+
+  # swipe: approach start → contact surface → drag to end → lift.
+  # Uses touch_stylus end-effector for screen interaction.
+  # swipe_start_frame / swipe_end_frame: TF frames of swipe start and end points.
+  swipe:
+    end_effector: touch_stylus
+    stages:
+      - name: approach_swipe_start
+        type: move_to
+        target_type: tf_frame
+        planner: interpolation
+        target: "{{swipe_start_frame}}"
+        offset: [0.0, 0.0, 0.05]
+      - name: contact_swipe
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, -1.0]
+        minmax_dist: [0.055, 0.055]
+        vel_acc: [0.05, 0.05]
+      - name: drag_to_end
+        type: move_to
+        target_type: tf_frame
+        planner: cartesian
+        target: "{{swipe_end_frame}}"
+        offset: [0.0, 0.0, -0.005]
+        vel_acc: [0.05, 0.05]
+      - name: lift_after_swipe
+        type: move_relative
+        planner: cartesian
+        frame: world
+        direction: [0.0, 0.0, 1.0]
+        minmax_dist: [0.05, 0.05]
